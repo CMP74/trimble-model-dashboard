@@ -258,3 +258,36 @@ body {
   background: #f9fafb;
   border-radius: 6px;
 }
+.viewer-container {
+  height: calc(100% - 52px);
+  width: 100%;
+  overflow: hidden;
+}
+
+.trimble-viewer {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.trimble-connect-button {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 6px;
+  background: #0063a3;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trimble-connect-button:hover {
+  opacity: 0.9;
+}
