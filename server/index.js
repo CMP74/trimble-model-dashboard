@@ -209,6 +209,194 @@ app.get("/api/auth/status", (req, res) => {
 });
 
 // ---------------------------------------------------------
+// Mock FieldView API
+// ---------------------------------------------------------
+
+const mockFieldViewRecords = [
+  {
+    id: "ITP-001",
+    type: "ITP",
+    title: "Structural concrete inspection",
+    status: "Passed",
+    date: "24 Sep 2026",
+    modelGuid: "demo-wall-001",
+  },
+  {
+    id: "NCR-014",
+    type: "NCR",
+    title: "Concrete finish NCR",
+    status: "Open",
+    date: "25 Sep 2026",
+    modelGuid: "demo-wall-001",
+  },
+  {
+    id: "ITP-002",
+    type: "Inspection",
+    title: "Structural element inspection",
+    status: "Closed",
+    date: "26 Sep 2026",
+    modelGuid: "demo-beam-001",
+  },
+];
+
+app.get("/api/fieldview/records", (req, res) => {
+  const { modelGuid } = req.query;
+
+  // If a model GUID is supplied, return records linked
+  // to that particular BIM object.
+  if (modelGuid) {
+    const records = mockFieldViewRecords.filter(
+      (record) => record.modelGuid === modelGuid
+    );
+
+    return res.json({
+      source: "mock-fieldview",
+      count: records.length,
+      records,
+    });
+  }
+
+  // Otherwise return all FieldView records.
+  res.json({
+    source: "mock-fieldview",
+    count: mockFieldViewRecords.length,
+    records: mockFieldViewRecords,
+  });
+});
+
+// ---------------------------------------------------------
+// Mock Trimble model API
+// ---------------------------------------------------------
+
+const mockModels = [
+  {
+    id: "model-001",
+    name: "Building-Structural.ifc",
+    discipline: "Structural",
+    loaded: true,
+    source: "Trimble Connect",
+  },
+  {
+    id: "model-002",
+    name: "Architecture.ifc",
+    discipline: "Architectural",
+    loaded: false,
+    source: "Trimble Connect",
+  },
+  {
+    id: "model-003",
+    name: "MEP.ifc",
+    discipline: "MEP",
+    loaded: false,
+    source: "Trimble Connect",
+  },
+];
+
+app.get("/api/models", (req, res) => {
+  res.json({
+    source: "mock-trimble",
+    count: mockModels.length,
+    models: mockModels,
+  });
+});
+
+// ---------------------------------------------------------
+// Mock BIM object data
+// ---------------------------------------------------------
+
+const mockModelObjects = [
+  {
+    guid: "demo-wall-001",
+    modelId: "model-001",
+    type: "IfcWall",
+    name: "External Concrete Wall",
+    level: "Ground Floor",
+    material: "Concrete",
+    discipline: "Structural",
+  },
+  {
+    guid: "demo-beam-001",
+    modelId: "model-001",
+    type: "IfcBeam",
+    name: "Primary Structural Beam",
+    level: "Level 01",
+    material: "Steel",
+    discipline: "Structural",
+  },
+];
+
+app.get("/api/model-objects", (req, res) => {
+  res.json({
+    source: "mock-model-data",
+    count: mockModelObjects.length,
+    objects: mockModelObjects,
+  });
+});
+
+app.get("/api/model-objects/:guid", (req, res) => {
+  const object = mockModelObjects.find(
+    (item) => item.guid === req.params.guid
+  );
+
+  if (!object) {
+    return res.status(404).json({
+      error: "Model object not found",
+    });
+  }
+
+  res.json({
+    source: "mock-model-data",
+    object,
+  });
+});
+
+
+// ---------------------------------------------------------
+// Mock Asite model data
+// ---------------------------------------------------------
+
+const mockAsiteModels = [
+  {
+    id: "asite-model-001",
+    name: "Structural_Model_Rev_P03.ifc",
+    revision: "P03",
+    discipline: "Structural",
+    status: "Published",
+    size: "48.2 MB",
+    modifiedDate: "27 Sep 2026",
+    source: "Asite",
+  },
+  {
+    id: "asite-model-002",
+    name: "Architectural_Model_Rev_P05.ifc",
+    revision: "P05",
+    discipline: "Architectural",
+    status: "Published",
+    size: "62.7 MB",
+    modifiedDate: "26 Sep 2026",
+    source: "Asite",
+  },
+  {
+    id: "asite-model-003",
+    name: "MEP_Coordination_Rev_P02.ifc",
+    revision: "P02",
+    discipline: "MEP",
+    status: "Published",
+    size: "37.4 MB",
+    modifiedDate: "25 Sep 2026",
+    source: "Asite",
+  },
+];
+
+app.get("/api/asite/models", (req, res) => {
+  res.json({
+    source: "mock-asite",
+    count: mockAsiteModels.length,
+    models: mockAsiteModels,
+  });
+});
+
+// ---------------------------------------------------------
 // Start server
 // ---------------------------------------------------------
 
