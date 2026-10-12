@@ -322,12 +322,76 @@ const mockModels = [
   },
 ];
 
-app.get("/api/models", (req, res) => {
-  res.json({
-    source: "mock-trimble",
-    count: mockModels.length,
-    models: mockModels,
-  });
+app.get("/api/models", async (req, res) => {
+  if (!trimbleAuth.accessToken) {
+    return res.status(401).json({
+      error: "Connect to Trimble first",
+    });
+  }
+
+  try {
+    const projectId = "7nAFSwau0CI";
+
+    const response = await fetch(
+      `https://app22.connect.trimble.com/tc/api/2.0/folders/KVqla3gS1XY/items`,
+      {
+        headers: {
+          Authorization: `Bearer ${trimbleAuth.accessToken}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      console.error(
+        "Trimble models API failed:",
+        response.status,
+        errorText
+      );
+
+      return res.status(502).json({
+        error: "Could not retrieve Trimble Connect models",
+        trimbleStatus: response.status,
+      });
+    }
+
+    const data = await response.json();
+
+    console.log(
+  "Trimble models response:",
+  JSON.stringify(data, null, 2).slice(0, 3000)
+);
+
+    const rawModels = Array.isArray(data)
+      ? data
+      : Array.isArray(data.models)
+        ? data.models
+        : Array.isArray(data.items)
+          ? data.items
+          : [];
+
+    const models = rawModels.map((model) => ({
+      id: String(model.id),
+      name: model.name || "Unnamed model",
+      discipline: "Unclassified",
+      loaded: false,
+      source: "Trimble Connect",
+    }));
+
+    return res.json({
+      source: "trimble-connect",
+      count: models.length,
+      models,
+    });
+  } catch (error) {
+    console.error("Trimble models request failed:", error);
+
+    return res.status(500).json({
+      error: "Could not retrieve Trimble Connect models",
+    });
+  }
 });
 
 // ---------------------------------------------------------

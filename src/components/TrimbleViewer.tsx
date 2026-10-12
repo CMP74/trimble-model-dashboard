@@ -1,8 +1,26 @@
+
 import { useEffect, useRef } from "react";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
-function TrimbleViewer() {
+type ModelCommand = {
+  id: string;
+  loaded: boolean;
+  sequence: number;
+};
+
+type TrimbleViewerProps = {
+  modelCommand?: ModelCommand;
+};
+
+type TrimbleAPI = Awaited<ReturnType<typeof WorkspaceAPI.connect>>;
+
+function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const apiRef = useRef<TrimbleAPI | null>(null);
+
+  // Remember commands until the viewer is ready.
+  const pendingCommandRef = useRef<ModelCommand | null>(null);
+  const lastCommandSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -56,6 +74,25 @@ function TrimbleViewer() {
         });
 
         console.log("4. Viewer initialized:", initialized);
+
+        if (!initialized || cancelled) return;
+
+        apiRef.current = API;
+
+        // Process a command received while the viewer was starting.
+        const pendingCommand = pendingCommandRef.current;
+
+        if (pendingCommand) {
+          pendingCommandRef.current = null;
+
+          await API.viewer.toggleModel(
+            pendingCommand.id,
+            pendingCommand.loaded
+          );
+
+          lastCommandSequenceRef.current =
+            pendingCommand.sequence;
+        }
       } catch (error) {
         if (!cancelled) {
           console.error("Trimble viewer error:", error);
@@ -71,9 +108,36 @@ function TrimbleViewer() {
 
     return () => {
       cancelled = true;
+      apiRef.current = null;
       iframe.removeEventListener("load", handleLoad);
     };
   }, []);
+
+  useEffect(() => {
+    if (!modelCommand) return;
+
+    // Avoid processing the same command twice.
+    if (
+      lastCommandSequenceRef.current === modelCommand.sequence
+    ) {
+      return;
+    }
+
+    const API = apiRef.current;
+
+    if (!API) {
+      pendingCommandRef.current = modelCommand;
+      return;
+    }
+
+    lastCommandSequenceRef.current = modelCommand.sequence;
+
+    void API.viewer
+      .toggleModel(modelCommand.id, modelCommand.loaded)
+      .catch((error) => {
+        console.error("Failed to toggle Trimble model:", error);
+      });
+  }, [modelCommand]);
 
   return (
     <iframe
