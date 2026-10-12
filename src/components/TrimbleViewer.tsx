@@ -6,40 +6,71 @@ function TrimbleViewer() {
 
   useEffect(() => {
     const iframe = iframeRef.current;
+    if (!iframe) return;
 
-    if (!iframe) {
-      console.error("Trimble iframe not found");
-      return;
-    }
+    let cancelled = false;
 
-    const connectToTrimble = async () => {
+    const initializeViewer = async () => {
       try {
-        console.log("1. Connecting to Trimble...");
+        console.log("1. Connecting to Trimble Workspace API...");
 
         const API = await WorkspaceAPI.connect(
           iframe,
-          (event, data) => {
+          (event: string, data: unknown) => {
             console.log("Trimble event:", event, data);
           },
           30000
         );
 
-        console.log("2. Trimble Workspace API connected");
-        console.log("Trimble API:", API);
+        if (cancelled) return;
 
+        console.log("2. Workspace API connected");
+
+        const response = await fetch("/api/auth/viewer-token", {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Viewer authentication failed: ${response.status}`
+          );
+        }
+
+        const { accessToken } = await response.json();
+
+        if (cancelled) return;
+
+        const tokenAccepted = await API.embed.setTokens({
+          accessToken,
+        });
+
+        console.log("3. Token accepted:", tokenAccepted);
+
+        if (!tokenAccepted) {
+          throw new Error("Trimble did not accept the viewer token");
+        }
+
+        const initialized = await API.embed.init3DViewer({
+          projectId: "7nAFSwau0CI",
+        });
+
+        console.log("4. Viewer initialized:", initialized);
       } catch (error) {
-        console.error("3. Trimble connection failed:", error);
+        if (!cancelled) {
+          console.error("Trimble viewer error:", error);
+        }
       }
     };
 
     const handleLoad = () => {
-      console.log("0. Trimble iframe loaded");
-      connectToTrimble();
+      void initializeViewer();
     };
 
     iframe.addEventListener("load", handleLoad);
 
     return () => {
+      cancelled = true;
       iframe.removeEventListener("load", handleLoad);
     };
   }, []);

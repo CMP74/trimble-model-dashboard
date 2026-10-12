@@ -206,7 +206,37 @@ app.get("/api/auth/status", (req, res) => {
     authenticated: Boolean(trimbleAuth.accessToken),
     user: trimbleAuth.user,
   });
+  
+ app.get("/api/auth/viewer-token", (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  if (!trimbleAuth.accessToken) {
+    return res.status(401).json({
+      error: "Not connected to Trimble",
+    });
+  }
+
+  res.json({
+    accessToken: trimbleAuth.accessToken,
+  });
+}); 
+
+  if (
+    !trimbleAuth.accessToken ||
+    (trimbleAuth.expiresAt && Date.now() >= trimbleAuth.expiresAt)
+  ) {
+    return res.status(401).json({
+      error: "Trimble session missing or expired",
+    });
+  }
+
+  res.set("Cache-Control", "no-store");
+
+  res.json({
+    accessToken: trimbleAuth.accessToken,
+  });
 });
+
 
 // ---------------------------------------------------------
 // Mock FieldView API
@@ -401,6 +431,20 @@ app.get("/api/asite/models", (req, res) => {
 // ---------------------------------------------------------
 
 const PORT = 3000;
+
+app.get("/api/auth/viewer-token", (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  if (!trimbleAuth.accessToken) {
+    return res.status(401).json({
+      error: "Not connected to Trimble",
+    });
+  }
+
+  return res.json({
+    accessToken: trimbleAuth.accessToken,
+  });
+});
 
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
