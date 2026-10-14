@@ -2,6 +2,31 @@
 import { useEffect, useRef } from "react";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
+export type BIMProperty = {
+  name: string;
+  value: unknown;
+  type?: number;
+};
+
+export type BIMPropertyGroup = {
+  name: string;
+  properties: BIMProperty[];
+};
+
+export type SelectedBIMObject = {
+  modelId: string;
+  runtimeId: number;
+  name: string;
+  ifcClass: string;
+  description: string;
+  position?: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  propertyGroups: BIMPropertyGroup[];
+};
+
 type ModelCommand = {
   id: string;
   loaded: boolean;
@@ -10,17 +35,36 @@ type ModelCommand = {
 
 type TrimbleViewerProps = {
   modelCommand?: ModelCommand;
+  onObjectSelected?: (object: SelectedBIMObject | null) => void;
 };
 
-type TrimbleAPI = Awaited<ReturnType<typeof WorkspaceAPI.connect>>;
+type TrimbleAPI = Awaited<
+  ReturnType<typeof WorkspaceAPI.connect>
+>;
 
-function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
+type SelectionEvent = {
+  data?: {
+    modelId: string;
+    objectRuntimeIds: number[];
+  }[];
+};
+
+function TrimbleViewer({
+  modelCommand,
+  onObjectSelected,
+}: TrimbleViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const apiRef = useRef<TrimbleAPI | null>(null);
 
-  // Remember commands until the viewer is ready.
   const pendingCommandRef = useRef<ModelCommand | null>(null);
   const lastCommandSequenceRef = useRef<number | null>(null);
+
+  // Keep the latest callback without reconnecting the viewer.
+  const onObjectSelectedRef = useRef(onObjectSelected);
+  onObjectSelectedRef.current = onObjectSelected;
+
+  // Prevent slower property requests from overwriting newer selections.
+  const selectionSequenceRef = useRef(0);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -36,6 +80,88 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
           iframe,
           (event: string, data: unknown) => {
             console.log("Trimble event:", event, data);
+
+            if (event !== "viewer.onSelectionChanged") {
+              return;
+            }
+
+            const selection = data as SelectionEvent;
+            const selected = selection.data?.[0];
+
+            const requestSequence =
+              ++selectionSequenceRef.current;
+
+            if (
+              !selected ||
+              !selected.objectRuntimeIds?.length
+            ) {
+              onObjectSelectedRef.current?.(null);
+              return;
+            }
+
+            const currentAPI = apiRef.current;
+
+            if (!currentAPI) return;
+
+            void currentAPI.viewer
+              .getObjectProperties(
+                selected.modelId,
+                selected.objectRuntimeIds
+              )
+              .then((objects) => {
+                if (
+                  cancelled ||
+                  requestSequence !==
+                    selectionSequenceRef.current
+                ) {
+                  return;
+                }
+
+                const object = objects[0];
+
+                if (!object) {
+                  onObjectSelectedRef.current?.(null);
+                  return;
+                }
+
+                const selectedObject: SelectedBIMObject = {
+                  modelId: selected.modelId,
+                  runtimeId: object.id,
+                  name:
+                    object.product?.name ??
+                    "Unnamed object",
+                  ifcClass: object.class ?? "Unknown",
+                  description:
+                    object.product?.description ?? "",
+                  position: object.position,
+                  propertyGroups:
+                    object.properties?.map((group) => ({
+                      name: group.name ?? "Other Properties",
+                      properties: (group.properties ?? []).map(
+                        (property) => ({
+                          name: property.name,
+                          value: property.value,
+                          type: property.type,
+                        })
+                      ),
+                    })) ?? [],
+                };
+
+                console.log(
+                  "Selected real BIM object:",
+                  selectedObject
+                );
+
+                onObjectSelectedRef.current?.(
+                  selectedObject
+                );
+              })
+              .catch((error) => {
+                console.error(
+                  "Could not retrieve BIM properties:",
+                  error
+                );
+              });
           },
           30000
         );
@@ -44,10 +170,13 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
 
         console.log("2. Workspace API connected");
 
-        const response = await fetch("/api/auth/viewer-token", {
-          credentials: "same-origin",
-          cache: "no-store",
-        });
+        const response = await fetch(
+          "/api/auth/viewer-token",
+          {
+            credentials: "same-origin",
+            cache: "no-store",
+          }
+        );
 
         if (!response.ok) {
           throw new Error(
@@ -66,7 +195,9 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
         console.log("3. Token accepted:", tokenAccepted);
 
         if (!tokenAccepted) {
-          throw new Error("Trimble did not accept the viewer token");
+          throw new Error(
+            "Trimble did not accept the viewer token"
+          );
         }
 
         const initialized = await API.embed.init3DViewer({
@@ -79,7 +210,6 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
 
         apiRef.current = API;
 
-        // Process a command received while the viewer was starting.
         const pendingCommand = pendingCommandRef.current;
 
         if (pendingCommand) {
@@ -95,7 +225,10 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
         }
       } catch (error) {
         if (!cancelled) {
-          console.error("Trimble viewer error:", error);
+          console.error(
+            "Trimble viewer error:",
+            error
+          );
         }
       }
     };
@@ -108,6 +241,7 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
 
     return () => {
       cancelled = true;
+      selectionSequenceRef.current++;
       apiRef.current = null;
       iframe.removeEventListener("load", handleLoad);
     };
@@ -116,9 +250,9 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
   useEffect(() => {
     if (!modelCommand) return;
 
-    // Avoid processing the same command twice.
     if (
-      lastCommandSequenceRef.current === modelCommand.sequence
+      lastCommandSequenceRef.current ===
+      modelCommand.sequence
     ) {
       return;
     }
@@ -130,12 +264,19 @@ function TrimbleViewer({ modelCommand }: TrimbleViewerProps) {
       return;
     }
 
-    lastCommandSequenceRef.current = modelCommand.sequence;
+    lastCommandSequenceRef.current =
+      modelCommand.sequence;
 
     void API.viewer
-      .toggleModel(modelCommand.id, modelCommand.loaded)
+      .toggleModel(
+        modelCommand.id,
+        modelCommand.loaded
+      )
       .catch((error) => {
-        console.error("Failed to toggle Trimble model:", error);
+        console.error(
+          "Failed to toggle Trimble model:",
+          error
+        );
       });
   }, [modelCommand]);
 

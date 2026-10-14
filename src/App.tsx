@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import TrimbleViewer from "./components/TrimbleViewer";
+import TrimbleViewer, {
+  type SelectedBIMObject,
+} from "./components/TrimbleViewer";
 import {
   getFieldViewRecords,
   type FieldViewRecord,
@@ -63,6 +65,24 @@ function App() {
     useState<ModelObject | null>(null);
   const [objectLoading, setObjectLoading] =
     useState(false);
+  const [realSelectedObject, setRealSelectedObject] =
+    useState<SelectedBIMObject | null>(null);
+
+  const formatBIMValue = (value: unknown): string => {
+    if (value === null || value === undefined) return "—";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  };
+
+  const getBIMProperty = (
+    object: SelectedBIMObject,
+    propertyName: string
+  ): string | undefined => {
+    const property = object.propertyGroups
+      .flatMap((group) => group.properties)
+      .find((item) => item.name.toLowerCase() === propertyName.toLowerCase());
+    return property ? formatBIMValue(property.value) : undefined;
+  };
   // -------------------------------------------------------
   // Filter Trimble models
   // -------------------------------------------------------
@@ -276,6 +296,7 @@ function App() {
   const selectModelObject = async (
     guid: string
   ) => {
+    setRealSelectedObject(null);
     try {
       setObjectLoading(true);
       const objectResponse = await fetch(
@@ -418,7 +439,13 @@ function App() {
               </div>
             </div>
             <div className="viewer-container">
-              <TrimbleViewer modelCommand={modelCommand} />
+              <TrimbleViewer
+                modelCommand={modelCommand}
+                onObjectSelected={(object) => {
+                  setRealSelectedObject(object);
+                  if (object) setSelectedObject(null);
+                }}
+              />
             </div>
           </section>
           {/* MODEL MANAGEMENT */}
@@ -659,11 +686,12 @@ function App() {
                 >
                   Demo Select Beam
                 </button>
-                {selectedObject && (
+                {(selectedObject || realSelectedObject) && (
                   <button
-                    onClick={
-                      clearObjectSelection
-                    }
+                    onClick={() => {
+                      setRealSelectedObject(null);
+                      void clearObjectSelection();
+                    }}
                   >
                     Clear Selection
                   </button>
@@ -674,20 +702,60 @@ function App() {
                 <div className="section-title">
                   Selected Object
                   <span className="mock-label">
-                    {objectLoading
-                      ? "Loading..."
-                      : selectedObject
-                        ? "Demo selection"
-                        : "Awaiting selection"}
+                    {realSelectedObject
+                      ? "Live Trimble data"
+                      : objectLoading
+                        ? "Loading..."
+                        : selectedObject
+                          ? "Demo selection"
+                          : "Awaiting selection"}
                   </span>
                 </div>
-                {!selectedObject && (
+                {!selectedObject && !realSelectedObject && (
                   <div className="empty-selection">
                     Select an object in
                     the 3D model to view
                     its BIM properties
                     and associated field
                     information.
+                  </div>
+                )}
+                {realSelectedObject && (
+                  <div className="model-list">
+                    {[
+                      ["Object", realSelectedObject.name],
+                      ["IFC Class", realSelectedObject.ifcClass],
+                      ["Description", realSelectedObject.description],
+                      ["Model ID", realSelectedObject.modelId],
+                      ["Runtime ID", String(realSelectedObject.runtimeId)],
+                      ["IFC GUID", getBIMProperty(realSelectedObject, "GlobalId") ?? "Not available"],
+                      ["Material", getBIMProperty(realSelectedObject, "Material") ?? "Not available"],
+                      ["Position", realSelectedObject.position
+                        ? `X: ${realSelectedObject.position.x}, Y: ${realSelectedObject.position.y}, Z: ${realSelectedObject.position.z}`
+                        : "Not available"],
+                    ].map(([label, value]) => (
+                      <div className="model-row" key={label}>
+                        <div className="model-details">
+                          <span>{label}</span>
+                          <strong style={{ overflowWrap: "anywhere" }}>{value}</strong>
+                        </div>
+                      </div>
+                    ))}
+                    {realSelectedObject.propertyGroups.map((group, index) => (
+                      <div key={`${group.name}-${index}`} style={{ marginTop: "14px" }}>
+                        <div className="section-title">{group.name}</div>
+                        {group.properties.map((property, propertyIndex) => (
+                          <div className="model-row" key={`${property.name}-${propertyIndex}`}>
+                            <div className="model-details">
+                              <span>{property.name}</span>
+                              <strong style={{ overflowWrap: "anywhere" }}>
+                                {formatBIMValue(property.value)}
+                              </strong>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
                   </div>
                 )}
                 {selectedObject && (
@@ -773,9 +841,11 @@ function App() {
                   Field Information
                 </h2>
                 <span>
-                  {selectedObject
-                    ? `Records linked to ${selectedObject.name}`
-                    : "Trimble FieldView"}
+                  {realSelectedObject
+                    ? "Trimble FieldView (mock records, not linked to selected IFC object)"
+                    : selectedObject
+                      ? `Records linked to ${selectedObject.name}`
+                      : "Trimble FieldView"}
                 </span>
               </div>
               <span className="mock-badge">
