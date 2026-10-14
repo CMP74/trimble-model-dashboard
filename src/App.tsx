@@ -742,19 +742,31 @@ function App() {
                       </div>
                     ))}
                     {realSelectedObject.propertyGroups.map((group, index) => (
-                      <div key={`${group.name}-${index}`} style={{ marginTop: "14px" }}>
-                        <div className="section-title">{group.name}</div>
-                        {group.properties.map((property, propertyIndex) => (
-                          <div className="model-row" key={`${property.name}-${propertyIndex}`}>
-                            <div className="model-details">
-                              <span>{property.name}</span>
-                              <strong style={{ overflowWrap: "anywhere" }}>
-                                {formatBIMValue(property.value)}
-                              </strong>
+                      <details
+                        key={`${group.name}-${index}`}
+                        className="bim-property-group"
+                      >
+                        <summary className="bim-property-group-header">
+                          <strong>{group.name}</strong>
+                          <span>{group.properties.length} properties</span>
+                        </summary>
+
+                        <div className="bim-property-group-content">
+                          {group.properties.map((property, propertyIndex) => (
+                            <div
+                              className="model-row"
+                              key={`${property.name}-${propertyIndex}`}
+                            >
+                              <div className="model-details">
+                                <span>{property.name}</span>
+                                <strong style={{ overflowWrap: "anywhere" }}>
+                                  {formatBIMValue(property.value)}
+                                </strong>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      </details>
                     ))}
                   </div>
                 )}

@@ -581,4 +581,34 @@ select {
   overflow: visible;
 }
 
+.bim-property-group {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.bim-property-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+  background: #f7f8fa;
+}
+
+.bim-property-group-header:hover {
+  background: #edf1f5;
+}
+
+.bim-property-group-header span {
+  font-size: 12px;
+  color: #666;
+}
+
+.bim-property-group-content {
+  padding: 8px 12px;
+}
+
 }
