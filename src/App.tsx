@@ -32,6 +32,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "data">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [tableSearch, setTableSearch] = useState("");
+  const [allBIMObjects, setAllBIMObjects] = useState<SelectedBIMObject[]>([]);
 
   const [authStatus, setAuthStatus] =
     useState("Not connected");
@@ -282,6 +283,7 @@ function App() {
         item.id === modelId ? { ...item, loaded } : item
       )
     );
+    if (!loaded) setAllBIMObjects(current => current.filter(object => object.modelId !== modelId));
     setModelCommand((previous) => ({
       id: modelId,
       loaded,
@@ -458,6 +460,9 @@ function App() {
             <div className="viewer-container">
               <TrimbleViewer
                 modelCommand={modelCommand}
+                onModelObjectsLoaded={(modelId, objects) => {
+                  setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
+                }}
                 onObjectSelected={(object) => {
                   setRealSelectedObject(object);
                   if (object) setSelectedObject(null);
@@ -957,7 +962,7 @@ function App() {
           <div className="panel-header model-data-header">
             <div>
               <h2>Model Data</h2>
-              <span>Spreadsheet view · live selected element only (for now)</span>
+              <span>Spreadsheet view · all loaded BIM objects</span>
             </div>
             <button
               type="button"
@@ -974,10 +979,10 @@ function App() {
                 type="search"
                 value={tableSearch}
                 onChange={(event) => setTableSearch(event.target.value)}
-                placeholder="Search selected element properties..."
+                placeholder="Search model objects..."
                 aria-label="Search model data"
               />
-              <span>Full model object listing and two-way filters: next stage</span>
+              <span>{allBIMObjects.length} BIM objects loaded</span>
             </div>
             <div className="model-data-scroll">
               <table className="model-data-table">
@@ -992,31 +997,27 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {realSelectedObject &&
-                  [
-                    realSelectedObject.runtimeId,
-                    realSelectedObject.name,
-                    realSelectedObject.ifcClass,
-                    getBIMProperty(realSelectedObject, "Material") ?? "—",
-                    realSelectedObject.modelId,
-                    String(realSelectedObject.propertyGroups.length),
-                  ].some((value) => String(value).toLowerCase().includes(tableSearch.toLowerCase())) ? (
-                    <tr>
-                      <td>{realSelectedObject.runtimeId}</td>
-                      <td>{realSelectedObject.name}</td>
-                      <td>{realSelectedObject.ifcClass}</td>
-                      <td>{getBIMProperty(realSelectedObject, "Material") ?? "—"}</td>
-                      <td>{realSelectedObject.modelId}</td>
-                      <td>{realSelectedObject.propertyGroups.length}</td>
+                  {allBIMObjects.filter(object => [
+                    object.runtimeId,
+                    object.name,
+                    object.ifcClass,
+                    getBIMProperty(object, "Material") ?? "—",
+                    object.modelId,
+                    object.propertyGroups.length,
+                  ].some(value => String(value).toLowerCase().includes(tableSearch.toLowerCase()))).map(object => (
+                    <tr key={`${object.modelId}-${object.runtimeId}`}>
+                      <td>{object.runtimeId}</td>
+                      <td>{object.name}</td>
+                      <td>{object.ifcClass}</td>
+                      <td>{getBIMProperty(object, "Material") ?? "—"}</td>
+                      <td>{object.modelId}</td>
+                      <td>{object.propertyGroups.length}</td>
                     </tr>
-                  ) : (
-                    <tr>
-                      <td colSpan={6} className="model-data-empty">
-                        {realSelectedObject
-                          ? "No selected element matches your search."
-                          : "No element selected yet. Click Show 3D, load a model and select an element to see its data here."}
-                      </td>
-                    </tr>
+                  ))}
+                  {allBIMObjects.length === 0 && (
+                    <tr><td colSpan={6} className="model-data-empty">
+                      No model objects loaded yet. Open 3D Dashboard and tick the IFC model checkbox.
+                    </td></tr>
                   )}
                 </tbody>
               </table>
