@@ -28,6 +28,11 @@ function App() {
   // -------------------------------------------------------
   // Authentication
   // -------------------------------------------------------
+  // Layout only: keep the Trimble viewer mounted across tab changes.
+  const [activeTab, setActiveTab] = useState<"dashboard" | "data">("dashboard");
+  const [showDataViewer, setShowDataViewer] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+
   const [authStatus, setAuthStatus] =
     useState("Not connected");
   // -------------------------------------------------------
@@ -39,7 +44,6 @@ function App() {
   // Trimble models
   // -------------------------------------------------------
   const [models, setModels] = useState<ModelItem[]>([]);
-
   const [modelCommand, setModelCommand] = useState<{
     id: string;
     loaded: boolean;
@@ -67,13 +71,11 @@ function App() {
     useState(false);
   const [realSelectedObject, setRealSelectedObject] =
     useState<SelectedBIMObject | null>(null);
-
   const formatBIMValue = (value: unknown): string => {
     if (value === null || value === undefined) return "—";
     if (typeof value === "object") return JSON.stringify(value);
     return String(value);
   };
-
   const getBIMProperty = (
     object: SelectedBIMObject,
     propertyName: string
@@ -127,7 +129,6 @@ function App() {
           "Could not load models:",
           error
         );
-
         // Temporary real model confirmed by the Trimble viewer event.
         // Used only while the project-folder listing endpoint is unavailable.
         setModels([{
@@ -275,15 +276,12 @@ function App() {
   const toggleModel = (modelId: string) => {
     const model = models.find((item) => item.id === modelId);
     if (!model) return;
-
     const loaded = !model.loaded;
-
     setModels((currentModels) =>
       currentModels.map((item) =>
         item.id === modelId ? { ...item, loaded } : item
       )
     );
-
     setModelCommand((previous) => ({
       id: modelId,
       loaded,
@@ -421,12 +419,31 @@ function App() {
           </div>
         </div>
       </header>
+      <nav className="dashboard-tabs" aria-label="Dashboard views">
+        <button
+          type="button"
+          className={activeTab === "dashboard" ? "dashboard-tab active" : "dashboard-tab"}
+          aria-current={activeTab === "dashboard" ? "page" : undefined}
+          onClick={() => setActiveTab("dashboard")}
+        >
+          3D Dashboard
+        </button>
+        <button
+          type="button"
+          className={activeTab === "data" ? "dashboard-tab active" : "dashboard-tab"}
+          aria-current={activeTab === "data" ? "page" : undefined}
+          onClick={() => setActiveTab("data")}
+        >
+          Model Data
+        </button>
+      </nav>
+
       {/* WORKSPACE */}
-      <main className="workspace">
+      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
         {/* LEFT COLUMN */}
-        <div className="workspace-left">
+        <div className="workspace-left" style={activeTab === "data" ? { display: showDataViewer ? "block" : "none", width: "100%" } : undefined}>
           {/* TRIMBLE VIEWER */}
-          <section className="panel viewer-panel">
+          <section className="panel viewer-panel" style={activeTab === "data" ? { display: showDataViewer ? "flex" : "none", height: "55vh", minHeight: 400 } : undefined}>
             <div className="panel-header">
               <div>
                 <h2>3D Model</h2>
@@ -449,7 +466,7 @@ function App() {
             </div>
           </section>
           {/* MODEL MANAGEMENT */}
-          <section className="panel models-panel">
+          <section className="panel models-panel" style={activeTab === "data" ? { display: "none" } : undefined}>
             <div className="panel-header">
               <div>
                 <h2>Models</h2>
@@ -621,7 +638,7 @@ function App() {
           </section>
         </div>
         {/* RIGHT COLUMN */}
-        <div className="workspace-right">
+        <div className="workspace-right" style={activeTab === "data" ? { display: "none" } : undefined}>
           {/* MODEL INFORMATION */}
           <section className="panel information-panel">
             <div className="panel-header">
@@ -750,7 +767,6 @@ function App() {
                           <strong>{group.name}</strong>
                           <span>{group.properties.length} properties</span>
                         </summary>
-
                         <div className="bim-property-group-content">
                           {group.properties.map((property, propertyIndex) => (
                             <div
@@ -935,6 +951,78 @@ function App() {
             </div>
           </section>
         </div>
+
+        {/* MODEL DATA TAB: first-stage layout. Full model extraction comes next. */}
+        <section className="panel model-data-panel" style={{ display: activeTab === "data" ? "block" : "none", width: "100%" }}>
+          <div className="panel-header model-data-header">
+            <div>
+              <h2>Model Data</h2>
+              <span>Spreadsheet view · live selected element only (for now)</span>
+            </div>
+            <button
+              type="button"
+              className="trimble-connect-button"
+              onClick={() => setShowDataViewer((current) => !current)}
+            >
+              {showDataViewer ? "Hide 3D" : "Show 3D"}
+            </button>
+          </div>
+          <div className="model-data-content">
+            <div className="model-data-toolbar">
+              <input
+                className="model-search"
+                type="search"
+                value={tableSearch}
+                onChange={(event) => setTableSearch(event.target.value)}
+                placeholder="Search selected element properties..."
+                aria-label="Search model data"
+              />
+              <span>Full model object listing and two-way filters: next stage</span>
+            </div>
+            <div className="model-data-scroll">
+              <table className="model-data-table">
+                <thead>
+                  <tr>
+                    <th>Runtime ID</th>
+                    <th>Object</th>
+                    <th>IFC Class</th>
+                    <th>Material</th>
+                    <th>Model ID</th>
+                    <th>Property groups</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {realSelectedObject &&
+                  [
+                    realSelectedObject.runtimeId,
+                    realSelectedObject.name,
+                    realSelectedObject.ifcClass,
+                    getBIMProperty(realSelectedObject, "Material") ?? "—",
+                    realSelectedObject.modelId,
+                    String(realSelectedObject.propertyGroups.length),
+                  ].some((value) => String(value).toLowerCase().includes(tableSearch.toLowerCase())) ? (
+                    <tr>
+                      <td>{realSelectedObject.runtimeId}</td>
+                      <td>{realSelectedObject.name}</td>
+                      <td>{realSelectedObject.ifcClass}</td>
+                      <td>{getBIMProperty(realSelectedObject, "Material") ?? "—"}</td>
+                      <td>{realSelectedObject.modelId}</td>
+                      <td>{realSelectedObject.propertyGroups.length}</td>
+                    </tr>
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="model-data-empty">
+                        {realSelectedObject
+                          ? "No selected element matches your search."
+                          : "No element selected yet. Click Show 3D, load a model and select an element to see its data here."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   );

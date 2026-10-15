@@ -1,7 +1,6 @@
 * {
   box-sizing: border-box;
 }
-
 body {
   margin: 0;
   min-width: 320px;
@@ -16,51 +15,42 @@ body {
     "Segoe UI",
     sans-serif;
 }
-
 button,
 input,
 select {
   font: inherit;
 }
-
 .app {
   min-height: 100vh;
 }
-
 /* ---------------------------------------------------------
    HEADER
 --------------------------------------------------------- */
-
 .app-header {
   min-height: 76px;
   padding: 14px 24px;
   background: #ffffff;
   border-bottom: 1px solid #d9dfe5;
-
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
 }
-
 .app-header h1 {
   margin: 0;
   font-size: 22px;
   font-weight: 700;
 }
-
 .app-header p {
   margin: 4px 0 0;
   color: #6b7780;
   font-size: 13px;
 }
-
 .header-actions {
   display: flex;
   align-items: center;
   gap: 16px;
 }
-
 .trimble-connect-button {
   padding: 10px 17px;
   border: 0;
@@ -71,11 +61,9 @@ select {
   font-weight: 650;
   cursor: pointer;
 }
-
 .trimble-connect-button:hover {
   opacity: 0.9;
 }
-
 .status {
   display: flex;
   align-items: center;
@@ -83,61 +71,48 @@ select {
   color: #5e6972;
   font-size: 13px;
 }
-
 .status-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background: #aeb6bc;
 }
-
 .status-dot.connected {
   background: #43a62a;
 }
-
 /* ---------------------------------------------------------
    WORKSPACE
 --------------------------------------------------------- */
-
 .workspace {
   min-height: calc(100vh - 76px);
   height: auto;
   padding: 16px;
-
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr);
-
   gap: 16px;
   align-items: start;
 }
-
 .workspace-left,
 .workspace-right {
   min-width: 0;
   min-height: 0;
-
   display: grid;
   gap: 16px;
-
   align-content: start;
 }
-
 /* Left side:
    Viewer first, Models panel underneath */
 .workspace-left {
   grid-template-rows: minmax(400px, 55vh) auto;
 }
-
 /* Right side:
    Model information then FieldView */
 .workspace-right {
   grid-template-rows: auto auto;
 }
-
 /* ---------------------------------------------------------
    PANELS
 --------------------------------------------------------- */
-
 .panel {
   min-width: 0;
   min-height: 0;
@@ -147,31 +122,26 @@ select {
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(25, 35, 45, 0.04);
 }
-
 .panel-header {
   min-height: 58px;
   padding: 11px 15px;
   border-bottom: 1px solid #e2e6e9;
-
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-
 .panel-header h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
 }
-
 .panel-header span {
   display: block;
   margin-top: 2px;
   color: #7a858d;
   font-size: 11px;
 }
-
 .panel-badge {
   padding: 5px 9px;
   border-radius: 4px;
@@ -180,22 +150,18 @@ select {
   font-size: 11px;
   font-weight: 700;
 }
-
 /* ---------------------------------------------------------
    VIEWER
 --------------------------------------------------------- */
-
 .viewer-panel {
   display: flex;
   flex-direction: column;
 }
-
 .viewer-container {
   flex: 1;
   min-height: 0;
   background: #e9edf0;
 }
-
 .trimble-viewer {
   display: block;
   width: 100%;
@@ -203,23 +169,18 @@ select {
   min-height: 400px;
   border: 0;
 }
-
 /* ---------------------------------------------------------
    MODELS
 --------------------------------------------------------- */
-
 .models-content {
   padding: 13px;
 }
-
 .model-toolbar {
   margin-bottom: 10px;
-
   display: grid;
   grid-template-columns: 1fr 180px;
   gap: 10px;
 }
-
 .model-search,
 .discipline-filter {
   width: 100%;
@@ -230,50 +191,40 @@ select {
   color: #25313a;
   font-size: 12px;
 }
-
 .model-list {
   border: 1px solid #e0e5e8;
   border-radius: 5px;
   overflow: hidden;
 }
-
 .model-row {
   min-height: 48px;
   padding: 8px 11px;
   border-bottom: 1px solid #e8ecef;
-
   display: flex;
   align-items: center;
   gap: 10px;
-
   cursor: pointer;
 }
-
 .model-row:last-child {
   border-bottom: 0;
 }
-
 .model-row:hover {
   background: #f8fafb;
 }
-
 .model-details {
   flex: 1;
   display: flex;
   flex-direction: column;
 }
-
 .model-details strong {
   font-size: 12px;
   font-weight: 650;
 }
-
 .model-details span {
   margin-top: 2px;
   color: #7a858d;
   font-size: 10px;
 }
-
 .loaded-badge {
   padding: 4px 7px;
   border-radius: 10px;
@@ -282,62 +233,50 @@ select {
   font-size: 9px;
   font-weight: 700;
 }
-
 /* ---------------------------------------------------------
    MODEL INFORMATION
 --------------------------------------------------------- */
-
 .information-content {
   padding: 14px;
 }
-
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 9px;
 }
-
 .summary-card {
   min-height: 72px;
   padding: 12px;
   border: 1px solid #e0e5e8;
   border-radius: 5px;
   background: #f8fafb;
-
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 }
-
 .summary-card span {
   color: #6e7a83;
   font-size: 11px;
 }
-
 .summary-card strong {
   font-size: 22px;
 }
-
 .selected-object {
   margin-top: 14px;
 }
-
 .section-title {
   margin-bottom: 8px;
   font-size: 12px;
   font-weight: 700;
-
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-
 .mock-label {
   color: #8a949b;
   font-size: 9px;
   font-weight: 500;
 }
-
 .empty-selection {
   padding: 16px;
   border: 1px dashed #ccd4da;
@@ -347,16 +286,13 @@ select {
   font-size: 11px;
   line-height: 1.5;
 }
-
 /* ---------------------------------------------------------
    FIELDVIEW
 --------------------------------------------------------- */
-
 .field-panel {
   display: flex;
   flex-direction: column;
 }
-
 .mock-badge {
   padding: 4px 7px;
   border-radius: 4px;
@@ -365,44 +301,35 @@ select {
   font-size: 9px !important;
   font-weight: 800;
 }
-
 .field-summary {
   padding: 12px 14px;
   border-bottom: 1px solid #e4e8eb;
-
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
-
 .field-summary div {
   padding: 9px;
   border-radius: 4px;
   background: #f6f8f9;
-
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-
 .field-summary span {
   color: #758089;
   font-size: 9px;
 }
-
 .field-summary strong {
   font-size: 17px;
 }
-
 .field-records {
   padding: 10px;
   overflow: auto;
-
   display: flex;
   flex-direction: column;
   gap: 7px;
 }
-
 .field-record {
   width: 100%;
   padding: 10px;
@@ -411,33 +338,26 @@ select {
   background: #ffffff;
   color: inherit;
   text-align: left;
-
   display: grid;
   grid-template-columns: 46px 1fr auto;
   align-items: center;
   gap: 9px;
-
   cursor: pointer;
 }
-
 .field-record:hover {
   background: #f8fafb;
   border-color: #cbd4da;
 }
-
 .record-type {
   color: #0063a3;
   font-size: 10px;
   font-weight: 800;
 }
-
 .record-main {
   min-width: 0;
-
   display: flex;
   flex-direction: column;
 }
-
 .record-main strong {
   overflow: hidden;
   font-size: 11px;
@@ -445,108 +365,88 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .record-main span {
   margin-top: 3px;
   color: #808a91;
   font-size: 9px;
 }
-
 .record-status {
   padding: 4px 7px;
   border-radius: 10px;
   font-size: 9px;
   font-weight: 700;
 }
-
 .record-status.passed,
 .record-status.closed {
   background: #e6f3e2;
   color: #367c26;
 }
-
 .record-status.open {
   background: #fde9e7;
   color: #b33a2f;
 }
-
 .record-status.pending {
   background: #fff3dc;
   color: #946100;
 }
-
 /* ---------------------------------------------------------
    RESPONSIVE
 --------------------------------------------------------- */
-
 @media (max-width: 900px) {
   .workspace {
     min-height: 0;
     height: auto;
-
     grid-template-columns: 1fr;
   }
-
   .workspace-left,
   .workspace-right {
     display: flex;
     flex-direction: column;
   }
-
   .workspace-left {
     overflow: visible;
   }
 }
-
 @media (max-width: 600px) {
   .app-header {
     align-items: flex-start;
     flex-direction: column;
   }
-
   .header-actions {
     width: 100%;
     justify-content: space-between;
   }
-
   .model-toolbar {
     grid-template-columns: 1fr;
   }
-
   /* ---------------------------------------------------------
    Prevent model / Asite rows overflowing their panel
 --------------------------------------------------------- */
-
 .models-panel {
   min-width: 0;
   height: auto;
   overflow: visible;
 }
-
 .models-content {
   min-width: 0;
   height: auto;
   overflow: visible;
 }
-
 .model-list {
   width: 100%;
   min-width: 0;
 }
-
 .model-row {
   width: 100%;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
 }
-
 .model-details {
   min-width: 0;
   flex: 1;
   overflow: hidden;
 }
-
 .model-details strong,
 .model-details span {
   display: block;
@@ -555,39 +455,32 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .model-row .trimble-connect-button {
   flex-shrink: 0;
   white-space: nowrap;
 }
-
 /* ---------------------------------------------------------
    Allow Models panel to show all Trimble + Asite rows
 --------------------------------------------------------- */
-
 .models-panel {
   overflow: visible;
   height: auto;
   min-height: 0;
 }
-
 .models-content {
   overflow: visible;
   height: auto;
   min-height: 0;
 }
-
 .workspace-left {
   overflow: visible;
 }
-
 .bim-property-group {
   border: 1px solid #ddd;
   border-radius: 6px;
   margin-top: 8px;
   overflow: hidden;
 }
-
 .bim-property-group-header {
   display: flex;
   justify-content: space-between;
@@ -597,18 +490,127 @@ select {
   cursor: pointer;
   background: #f7f8fa;
 }
-
 .bim-property-group-header:hover {
   background: #edf1f5;
 }
-
 .bim-property-group-header span {
   font-size: 12px;
   color: #666;
 }
-
 .bim-property-group-content {
   padding: 8px 12px;
 }
 
+/* ---------------------------------------------------------
+   DASHBOARD / MODEL DATA TABS
+   The existing viewer stays mounted while switching tabs.
+--------------------------------------------------------- */
+.dashboard-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 0;
+  background: #f3f5f7;
+}
+.dashboard-tab {
+  border: 1px solid #cbd4da;
+  border-radius: 5px 5px 0 0;
+  background: #fff;
+  color: #33434f;
+  padding: 11px 18px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.dashboard-tab.active {
+  color: #0063a3;
+  border-bottom: 3px solid #0063a3;
+}
+.model-data-panel { display: none; }
+.workspace.model-data-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.workspace.model-data-mode .workspace-left {
+  display: contents;
+}
+.workspace.model-data-mode .workspace-right,
+.workspace.model-data-mode .models-panel {
+  display: none;
+}
+.workspace.model-data-mode .viewer-panel {
+  display: none;
+}
+.workspace.model-data-mode.data-viewer-visible .viewer-panel {
+  display: flex;
+  height: min(55vh, 580px);
+  min-height: 400px;
+}
+.workspace.model-data-mode .model-data-panel {
+  display: block;
+  width: 100%;
+}
+.model-data-content { padding: 16px; }
+.model-data-header { flex-wrap: wrap; }
+.model-data-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.model-data-toolbar input { width: min(100%, 400px); }
+.model-data-toolbar span { font-size: 12px; color: #6b7780; }
+.model-data-scroll { overflow-x: auto; }
+.model-data-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 800px;
+  font-size: 12px;
+}
+.model-data-table th,
+.model-data-table td {
+  padding: 12px;
+  border: 1px solid #e0e5e8;
+  text-align: left;
+  vertical-align: top;
+}
+.model-data-table th { background: #f4f7f9; white-space: nowrap; }
+.model-data-table tbody tr:hover { background: #f8fafb; }
+.model-data-table .model-data-empty {
+  padding: 28px;
+  text-align: center;
+  color: #687680;
+}
+
+/* Tab layout: override the default dashboard grid and responsive rules. */
+.workspace.model-data-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.workspace.model-data-mode > .workspace-left {
+  display: contents;
+}
+.workspace.model-data-mode > .workspace-right,
+.workspace.model-data-mode .models-panel {
+  display: none;
+}
+.workspace.model-data-mode .viewer-panel {
+  display: none;
+}
+.workspace.model-data-mode.data-viewer-visible .viewer-panel {
+  display: flex;
+  height: min(55vh, 580px);
+  min-height: 400px;
+}
+.workspace.model-data-mode > .model-data-panel {
+  display: block;
+  width: 100%;
+  order: 0;
+}
+.workspace.model-data-mode.data-viewer-visible .viewer-panel {
+  order: -1;
+}
+.workspace:not(.model-data-mode) > .model-data-panel {
+  display: none;
 }
