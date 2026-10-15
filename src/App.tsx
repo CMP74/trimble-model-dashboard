@@ -86,6 +86,30 @@ function App() {
       .find((item) => item.name.toLowerCase() === propertyName.toLowerCase());
     return property ? formatBIMValue(property.value) : undefined;
   };
+  // Dynamic columns preserve each IFC property group and its individual fields.
+  const propertyColumns = Array.from(
+    new Set(allBIMObjects.flatMap(object =>
+      object.propertyGroups.flatMap(group =>
+        group.properties.map(property => `${group.name} / ${property.name}`)
+      )
+    ))
+  ).sort((a, b) => a.localeCompare(b));
+  const getGroupedProperty = (object: SelectedBIMObject, column: string): string => {
+    const separator = column.indexOf(" / ");
+    const groupName = column.slice(0, separator);
+    const propertyName = column.slice(separator + 3);
+    const group = object.propertyGroups.find(item => item.name === groupName);
+    const property = group?.properties.find(item => item.name === propertyName);
+    return property ? formatBIMValue(property.value) : "—";
+  };
+  const filteredBIMObjects = allBIMObjects.filter(object => {
+    const query = tableSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      object.runtimeId, object.name, object.ifcClass, object.description,
+      object.modelId, ...propertyColumns.map(column => getGroupedProperty(object, column)),
+    ].some(value => String(value).toLowerCase().includes(query));
+  });
   // -------------------------------------------------------
   // Filter Trimble models
   // -------------------------------------------------------
@@ -979,10 +1003,10 @@ function App() {
                 type="search"
                 value={tableSearch}
                 onChange={(event) => setTableSearch(event.target.value)}
-                placeholder="Search model objects..."
+                placeholder="Search all BIM properties..."
                 aria-label="Search model data"
               />
-              <span>{allBIMObjects.length} BIM objects loaded</span>
+              <span>{filteredBIMObjects.length} of {allBIMObjects.length} BIM objects · {propertyColumns.length} IFC property columns</span>
             </div>
             <div className="model-data-scroll">
               <table className="model-data-table">
@@ -991,32 +1015,49 @@ function App() {
                     <th>Runtime ID</th>
                     <th>Object</th>
                     <th>IFC Class</th>
-                    <th>Material</th>
+                    <th>Description</th>
                     <th>Model ID</th>
-                    <th>Property groups</th>
+                    {propertyColumns.map(column => {
+                      const separator = column.indexOf(" / ");
+                      const group = column.slice(0, separator);
+                      const property = column.slice(separator + 3);
+                      return <th key={column} title={column}>
+                        <span className="bim-column-name">{property}</span>
+                        <span className="bim-column-group">{group}</span>
+                      </th>;
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {allBIMObjects.filter(object => [
-                    object.runtimeId,
-                    object.name,
-                    object.ifcClass,
-                    getBIMProperty(object, "Material") ?? "—",
-                    object.modelId,
-                    object.propertyGroups.length,
-                  ].some(value => String(value).toLowerCase().includes(tableSearch.toLowerCase()))).map(object => (
-                    <tr key={`${object.modelId}-${object.runtimeId}`}>
+                  {filteredBIMObjects.map(object => (
+                    <tr
+                      key={`${object.modelId}-${object.runtimeId}`}
+                      onClick={() => {
+                        setRealSelectedObject(object);
+                        setSelectedObject(null);
+                      }}
+                      style={{
+                        cursor: "pointer",
+                        background: realSelectedObject?.modelId === object.modelId &&
+                          realSelectedObject?.runtimeId === object.runtimeId ? "#e7f1ff" : undefined,
+                      }}
+                      title="Select this BIM element to inspect its property groups on the 3D Dashboard"
+                    >
                       <td>{object.runtimeId}</td>
                       <td>{object.name}</td>
                       <td>{object.ifcClass}</td>
-                      <td>{getBIMProperty(object, "Material") ?? "—"}</td>
+                      <td>{object.description || "—"}</td>
                       <td>{object.modelId}</td>
-                      <td>{object.propertyGroups.length}</td>
+                      {propertyColumns.map(column => (
+                        <td key={column}>{getGroupedProperty(object, column)}</td>
+                      ))}
                     </tr>
                   ))}
-                  {allBIMObjects.length === 0 && (
-                    <tr><td colSpan={6} className="model-data-empty">
-                      No model objects loaded yet. Open 3D Dashboard and tick the IFC model checkbox.
+                  {filteredBIMObjects.length === 0 && (
+                    <tr><td colSpan={5 + propertyColumns.length} className="model-data-empty">
+                      {allBIMObjects.length === 0
+                        ? "No model objects loaded yet. Open 3D Dashboard and tick the IFC model checkbox."
+                        : "No BIM objects match your search."}
                     </td></tr>
                   )}
                 </tbody>
