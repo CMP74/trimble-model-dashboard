@@ -36,6 +36,7 @@ function App() {
   const [propertyColumnFilter, setPropertyColumnFilter] = useState("");
   const [propertyValueFilter, setPropertyValueFilter] = useState("");
   const [showFilteredIn3D, setShowFilteredIn3D] = useState(false);
+  const [hiddenPropertyColumns, setHiddenPropertyColumns] = useState<string[]>([]);
   const [allBIMObjects, setAllBIMObjects] = useState<SelectedBIMObject[]>([]);
 
   const [authStatus, setAuthStatus] =
@@ -103,6 +104,7 @@ function App() {
       )
     ))
   ).sort((a, b) => a.localeCompare(b));
+  const visiblePropertyColumns = propertyColumns.filter(column => !hiddenPropertyColumns.includes(column));
   const getGroupedProperty = (object: SelectedBIMObject, column: string): string => {
     const separator = column.indexOf(" / ");
     const groupName = column.slice(0, separator);
@@ -1085,6 +1087,28 @@ function App() {
                 disabled={!tableSearch && !ifcClassFilter && !propertyColumnFilter && !propertyValueFilter}>
                 Reset filters
               </button>
+              <details style={{ position: "relative" }}>
+                <summary style={{ cursor: "pointer", padding: "7px 10px", border: "1px solid #ccc", borderRadius: 4 }}>
+                  Choose columns ({visiblePropertyColumns.length}/{propertyColumns.length})
+                </summary>
+                <div style={{ position: "absolute", zIndex: 20, top: "100%", left: 0, width: 330, maxWidth: "85vw", maxHeight: 360, overflowY: "auto", background: "white", color: "#222", border: "1px solid #ccc", borderRadius: 4, boxShadow: "0 4px 12px #0002", padding: 12 }}>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                    <button type="button" onClick={() => setHiddenPropertyColumns([])}>Select all</button>
+                    <button type="button" onClick={() => setHiddenPropertyColumns(propertyColumns)}>Clear all</button>
+                    <button type="button" onClick={() => setHiddenPropertyColumns([])}>Reset to default</button>
+                  </div>
+                  <div style={{ fontSize: 12, marginBottom: 8 }}>The five main columns remain visible. Search and filters still use all properties.</div>
+                  {propertyColumns.map(column => (
+                    <label key={column} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0", cursor: "pointer", overflowWrap: "anywhere" }}>
+                      <input type="checkbox" checked={!hiddenPropertyColumns.includes(column)}
+                        onChange={event => setHiddenPropertyColumns(current => event.target.checked
+                          ? current.filter(item => item !== column)
+                          : [...current, column])} />
+                      <span>{column}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", whiteSpace: "nowrap" }}>
                 <input
                   type="checkbox"
@@ -1105,7 +1129,7 @@ function App() {
                     <th>IFC Class</th>
                     <th>Description</th>
                     <th>Model ID</th>
-                    {propertyColumns.map(column => {
+                    {visiblePropertyColumns.map(column => {
                       const separator = column.indexOf(" / ");
                       const group = column.slice(0, separator);
                       const property = column.slice(separator + 3);
@@ -1141,13 +1165,13 @@ function App() {
                       <td>{object.ifcClass}</td>
                       <td>{object.description || "—"}</td>
                       <td>{object.modelId}</td>
-                      {propertyColumns.map(column => (
+                      {visiblePropertyColumns.map(column => (
                         <td key={column}>{getGroupedProperty(object, column)}</td>
                       ))}
                     </tr>
                   ))}
                   {filteredBIMObjects.length === 0 && (
-                    <tr><td colSpan={5 + propertyColumns.length} className="model-data-empty">
+                    <tr><td colSpan={5 + visiblePropertyColumns.length} className="model-data-empty">
                       {allBIMObjects.length === 0
                         ? "No model objects loaded yet. Open 3D Dashboard and tick the IFC model checkbox."
                         : "No BIM objects match your search."}
