@@ -13,15 +13,26 @@ export type SelectedBIMObject = {
   propertyGroups: BIMPropertyGroup[];
 };
 type ModelCommand = { id: string; loaded: boolean; sequence: number };
+type ObjectSelectionCommand = {
+  modelId: string;
+  runtimeId: number;
+  sequence: number;
+};
 type TrimbleViewerProps = {
   modelCommand?: ModelCommand;
+  selectionCommand?: ObjectSelectionCommand;
   onObjectSelected?: (object: SelectedBIMObject | null) => void;
   onModelObjectsLoaded?: (modelId: string, objects: SelectedBIMObject[]) => void;
 };
 type TrimbleAPI = Awaited<ReturnType<typeof WorkspaceAPI.connect>>;
 type SelectionEvent = { data?: { modelId: string; objectRuntimeIds: number[] }[] };
 
-function TrimbleViewer({ modelCommand, onObjectSelected, onModelObjectsLoaded }: TrimbleViewerProps) {
+function TrimbleViewer({
+  modelCommand,
+  selectionCommand,
+  onObjectSelected,
+  onModelObjectsLoaded,
+}: TrimbleViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const apiRef = useRef<TrimbleAPI | null>(null);
   const pendingCommandRef = useRef<ModelCommand | null>(null);
@@ -154,6 +165,21 @@ function TrimbleViewer({ modelCommand, onObjectSelected, onModelObjectsLoaded }:
       })
       .catch(error => console.error("Failed to toggle Trimble model:", error));
   }, [modelCommand]);
+
+  useEffect(() => {
+    if (!selectionCommand) return;
+    const API = apiRef.current;
+    if (!API) return;
+    void API.viewer.setSelection(
+      {
+        modelObjectIds: [{
+          modelId: selectionCommand.modelId,
+          objectRuntimeIds: [selectionCommand.runtimeId],
+        }],
+      },
+      "set"
+    ).catch(error => console.error("Could not select BIM object in 3D:", error));
+  }, [selectionCommand]);
 
   return <iframe ref={iframeRef} src={WorkspaceAPI.getConnectEmbedUrl()} title="Trimble Connect 3D Viewer" className="trimble-viewer" />;
 }

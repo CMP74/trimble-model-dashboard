@@ -50,6 +50,11 @@ function App() {
     loaded: boolean;
     sequence: number;
   } | undefined>(undefined);
+  const [selectionCommand, setSelectionCommand] = useState<{
+    modelId: string;
+    runtimeId: number;
+    sequence: number;
+  }>();
   const [modelsLoading, setModelsLoading] =
     useState(true);
   const [modelSearch, setModelSearch] = useState("");
@@ -484,6 +489,7 @@ function App() {
             <div className="viewer-container">
               <TrimbleViewer
                 modelCommand={modelCommand}
+                selectionCommand={selectionCommand}
                 onModelObjectsLoaded={(modelId, objects) => {
                   setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
                 }}
@@ -1035,6 +1041,11 @@ function App() {
                       onClick={() => {
                         setRealSelectedObject(object);
                         setSelectedObject(null);
+                        setSelectionCommand(previous => ({
+                          modelId: object.modelId,
+                          runtimeId: object.runtimeId,
+                          sequence: (previous?.sequence ?? 0) + 1,
+                        }));
                       }}
                       style={{
                         cursor: "pointer",
