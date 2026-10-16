@@ -32,6 +32,10 @@ function App() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "data">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [tableSearch, setTableSearch] = useState("");
+  const [ifcClassFilter, setIfcClassFilter] = useState("");
+  const [propertyColumnFilter, setPropertyColumnFilter] = useState("");
+  const [propertyValueFilter, setPropertyValueFilter] = useState("");
+  const [showFilteredIn3D, setShowFilteredIn3D] = useState(false);
   const [allBIMObjects, setAllBIMObjects] = useState<SelectedBIMObject[]>([]);
 
   const [authStatus, setAuthStatus] =
@@ -107,7 +111,16 @@ function App() {
     const property = group?.properties.find(item => item.name === propertyName);
     return property ? formatBIMValue(property.value) : "—";
   };
+  const ifcClasses = Array.from(new Set(allBIMObjects.map(object => object.ifcClass)))
+    .sort((a, b) => a.localeCompare(b));
+  const propertyValues = propertyColumnFilter
+    ? Array.from(new Set(allBIMObjects.map(object => getGroupedProperty(object, propertyColumnFilter))))
+        .sort((a, b) => a.localeCompare(b))
+    : [];
   const filteredBIMObjects = allBIMObjects.filter(object => {
+    if (ifcClassFilter && object.ifcClass !== ifcClassFilter) return false;
+    if (propertyColumnFilter && propertyValueFilter &&
+        getGroupedProperty(object, propertyColumnFilter) !== propertyValueFilter) return false;
     const query = tableSearch.trim().toLowerCase();
     if (!query) return true;
     return [
@@ -115,6 +128,30 @@ function App() {
       object.modelId, ...propertyColumns.map(column => getGroupedProperty(object, column)),
     ].some(value => String(value).toLowerCase().includes(query));
   });
+  // Stable primitive key: only send visibility changes when the actual matching IDs change.
+  const hiddenObjectIds = showFilteredIn3D
+    ? allBIMObjects.filter(object => !filteredBIMObjects.some(match =>
+        match.modelId === object.modelId && match.runtimeId === object.runtimeId))
+    : [];
+  const hiddenObjectIdsKey = hiddenObjectIds
+    .map(object => `${object.modelId}:${object.runtimeId}`)
+    .sort()
+    .join("|");
+  const visibleObjectIdsKey = showFilteredIn3D
+    ? filteredBIMObjects.map(object => `${object.modelId}:${object.runtimeId}`).sort().join("|")
+    : "";
+  const visibilityCommand = {
+    enabled: showFilteredIn3D,
+    hiddenObjectIdsKey,
+    visibleObjectIdsKey,
+  };
+
+  const clearTableFilters = () => {
+    setTableSearch("");
+    setIfcClassFilter("");
+    setPropertyColumnFilter("");
+    setPropertyValueFilter("");
+  };
   // -------------------------------------------------------
   // Filter Trimble models
   // -------------------------------------------------------
@@ -490,6 +527,7 @@ function App() {
               <TrimbleViewer
                 modelCommand={modelCommand}
                 selectionCommand={selectionCommand}
+                visibilityCommand={visibilityCommand}
                 onModelObjectsLoaded={(modelId, objects) => {
                   setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
                 }}
@@ -1003,7 +1041,7 @@ function App() {
             </button>
           </div>
           <div className="model-data-content">
-            <div className="model-data-toolbar">
+            <div className="model-data-toolbar" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
               <input
                 className="model-search"
                 type="search"
@@ -1012,6 +1050,50 @@ function App() {
                 placeholder="Search all BIM properties..."
                 aria-label="Search model data"
               />
+              <select
+                className="discipline-filter"
+                aria-label="Filter by IFC class"
+                value={ifcClassFilter}
+                onChange={(event) => setIfcClassFilter(event.target.value)}
+              >
+                <option value="">All IFC classes</option>
+                {ifcClasses.map(ifcClass => <option key={ifcClass} value={ifcClass}>{ifcClass}</option>)}
+              </select>
+              <select
+                className="discipline-filter"
+                aria-label="Choose IFC property column"
+                value={propertyColumnFilter}
+                onChange={(event) => {
+                  setPropertyColumnFilter(event.target.value);
+                  setPropertyValueFilter("");
+                }}
+              >
+                <option value="">All property columns</option>
+                {propertyColumns.map(column => <option key={column} value={column}>{column}</option>)}
+              </select>
+              <select
+                className="discipline-filter"
+                aria-label="Filter by property value"
+                value={propertyValueFilter}
+                onChange={(event) => setPropertyValueFilter(event.target.value)}
+                disabled={!propertyColumnFilter}
+              >
+                <option value="">All values</option>
+                {propertyValues.map(value => <option key={value} value={value}>{value}</option>)}
+              </select>
+              <button type="button" onClick={clearTableFilters}
+                disabled={!tableSearch && !ifcClassFilter && !propertyColumnFilter && !propertyValueFilter}>
+                Reset filters
+              </button>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <input
+                  type="checkbox"
+                  checked={showFilteredIn3D}
+                  onChange={event => setShowFilteredIn3D(event.target.checked)}
+                  disabled={allBIMObjects.length === 0}
+                />
+                Show filtered elements only in 3D
+              </label>
               <span>{filteredBIMObjects.length} of {allBIMObjects.length} BIM objects · {propertyColumns.length} IFC property columns</span>
             </div>
             <div className="model-data-scroll">

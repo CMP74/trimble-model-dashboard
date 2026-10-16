@@ -18,7 +18,9 @@ type ObjectSelectionCommand = {
   runtimeId: number;
   sequence: number;
 };
+type VisibilityCommand = { enabled: boolean; hiddenObjectIdsKey: string; visibleObjectIdsKey: string };
 type TrimbleViewerProps = {
+  visibilityCommand?: VisibilityCommand;
   modelCommand?: ModelCommand;
   selectionCommand?: ObjectSelectionCommand;
   onObjectSelected?: (object: SelectedBIMObject | null) => void;
@@ -30,6 +32,7 @@ type SelectionEvent = { data?: { modelId: string; objectRuntimeIds: number[] }[]
 function TrimbleViewer({
   modelCommand,
   selectionCommand,
+  visibilityCommand,
   onObjectSelected,
   onModelObjectsLoaded,
 }: TrimbleViewerProps) {
@@ -43,6 +46,9 @@ function TrimbleViewer({
   onModelObjectsLoadedRef.current = onModelObjectsLoaded;
   const selectionSequenceRef = useRef(0);
   const modelRequestSequenceRef = useRef(0);
+  const visibilityQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const allModelEntityIdsRef = useRef<Map<string, number[]>>(new Map());
+
 
   const mapObject = (modelId: string, object: Awaited<ReturnType<TrimbleAPI["viewer"]["getObjectProperties"]>>[number]): SelectedBIMObject => ({
     modelId,
@@ -79,7 +85,7 @@ function TrimbleViewer({
         allObjects.push(...batch.map(object => mapObject(modelId, object)));
       }
       if (requestSequence === modelRequestSequenceRef.current) {
-        console.log("BIM objects sent to Model Data:", allObjects.length);
+        allModelEntityIdsRef.current.set(modelId, allObjects.map(object => object.runtimeId));
         onModelObjectsLoadedRef.current?.(modelId, allObjects);
       }
     } catch (error) {
@@ -93,9 +99,7 @@ function TrimbleViewer({
     let cancelled = false;
     const initializeViewer = async () => {
       try {
-        console.log("1. Connecting to Trimble Workspace API...");
         const API = await WorkspaceAPI.connect(iframe, (event: string, data: unknown) => {
-          console.log("Trimble event:", event, data);
           if (event !== "viewer.onSelectionChanged") return;
           const selection = data as SelectionEvent;
           const selected = selection.data?.[0];
@@ -115,16 +119,13 @@ function TrimbleViewer({
             .catch(error => console.error("Could not retrieve BIM properties:", error));
         }, 30000);
         if (cancelled) return;
-        console.log("2. Workspace API connected");
         const response = await fetch("/api/auth/viewer-token", { credentials: "same-origin", cache: "no-store" });
         if (!response.ok) throw new Error(`Viewer authentication failed: ${response.status}`);
         const { accessToken } = await response.json();
         if (cancelled) return;
         const tokenAccepted = await API.embed.setTokens({ accessToken });
-        console.log("3. Token accepted:", tokenAccepted);
         if (!tokenAccepted) throw new Error("Trimble did not accept the viewer token");
         const initialized = await API.embed.init3DViewer({ projectId: "7nAFSwau0CI" });
-        console.log("4. Viewer initialized:", initialized);
         if (!initialized || cancelled) return;
         apiRef.current = API;
         const pendingCommand = pendingCommandRef.current;
@@ -158,7 +159,10 @@ function TrimbleViewer({
       return;
     }
     lastCommandSequenceRef.current = modelCommand.sequence;
-    if (!modelCommand.loaded) modelRequestSequenceRef.current++;
+    if (!modelCommand.loaded) {
+      modelRequestSequenceRef.current++;
+      allModelEntityIdsRef.current.delete(modelCommand.id);
+    }
     void API.viewer.toggleModel(modelCommand.id, modelCommand.loaded)
       .then(() => {
         if (modelCommand.loaded) return collectModelObjects(API, modelCommand.id);
@@ -180,6 +184,51 @@ function TrimbleViewer({
       "set"
     ).catch(error => console.error("Could not select BIM object in 3D:", error));
   }, [selectionCommand]);
+
+  useEffect(() => {
+    const API = apiRef.current;
+    if (!API || !visibilityCommand) return;
+
+    const parseIds = (key: string): Map<string, number[]> => {
+      const grouped = new Map<string, number[]>();
+      for (const entry of key.split("|")) {
+        if (!entry) continue;
+        const separator = entry.lastIndexOf(":");
+        if (separator < 0) continue;
+        const modelId = entry.slice(0, separator);
+        const runtimeId = Number(entry.slice(separator + 1));
+        if (!Number.isInteger(runtimeId)) continue;
+        const ids = grouped.get(modelId) ?? [];
+        ids.push(runtimeId);
+        grouped.set(modelId, ids);
+      }
+      return grouped;
+    };
+
+    const matching = visibilityCommand.enabled
+      ? parseIds(visibilityCommand.visibleObjectIdsKey)
+      : new Map<string, number[]>();
+    const enabled = visibilityCommand.enabled;
+    const entities = [...matching].map(([modelId, entityIds]) => ({ modelId, entityIds }));
+
+    // Serialize isolation changes to avoid overlapping viewer commands.
+    visibilityQueueRef.current = visibilityQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (!enabled) {
+          // An empty list isolates nothing; it does not restore visibility.
+          // Isolating every loaded runtime ID restores the complete model.
+          const allEntities = [...allModelEntityIdsRef.current].map(([modelId, entityIds]) => ({ modelId, entityIds }));
+          const total = allEntities.reduce((sum, item) => sum + item.entityIds.length, 0);
+          if (!total) return;
+          await API.viewer.isolateEntities(allEntities);
+          return;
+        }
+        // Native viewer "Show only selected objects"; do not hide non-matches.
+        await API.viewer.isolateEntities(entities);
+      })
+      .catch(error => console.error("[3D filter] Native isolation failed:", error));
+  }, [visibilityCommand?.enabled, visibilityCommand?.visibleObjectIdsKey]);
 
   return <iframe ref={iframeRef} src={WorkspaceAPI.getConnectEmbedUrl()} title="Trimble Connect 3D Viewer" className="trimble-viewer" />;
 }
