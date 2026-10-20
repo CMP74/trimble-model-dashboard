@@ -5,10 +5,6 @@ import TrimbleViewer, {
   type SelectedBIMObject,
 } from "./components/TrimbleViewer";
 import {
-  getFieldViewRecords,
-  type FieldViewRecord,
-} from "./services/fieldViewService";
-import {
   getModels,
   type ModelItem,
 } from "./services/modelService";
@@ -16,22 +12,15 @@ import {
   getAsiteModels,
   type AsiteModel,
 } from "./services/asiteService";
-type ModelObject = {
-  guid: string;
-  modelId: string;
-  type: string;
-  name: string;
-  level: string;
-  material: string;
-  discipline: string;
-};
 function App() {
   // -------------------------------------------------------
   // Authentication
   // -------------------------------------------------------
   // Layout only: keep the Trimble viewer mounted across tab changes.
-  const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview" | "ai">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiSubmitted, setAiSubmitted] = useState("");
   const [tableSearch, setTableSearch] = useState("");
   const [ifcClassFilter, setIfcClassFilter] = useState("");
   const [propertyColumnFilter, setPropertyColumnFilter] = useState("");
@@ -45,8 +34,6 @@ function App() {
   // -------------------------------------------------------
   // FieldView
   // -------------------------------------------------------
-  const [fieldViewRecords, setFieldViewRecords] =
-    useState<FieldViewRecord[]>([]);
   const [fieldViewData, setFieldViewData] = useState<FieldViewData | null>(null);
   const [fieldViewError, setFieldViewError] = useState("");
   const [fieldViewLoading, setFieldViewLoading] = useState(false);
@@ -95,10 +82,6 @@ function App() {
   // -------------------------------------------------------
   // Selected BIM object
   // -------------------------------------------------------
-  const [selectedObject, setSelectedObject] =
-    useState<ModelObject | null>(null);
-  const [objectLoading, setObjectLoading] =
-    useState(false);
   const [realSelectedObject, setRealSelectedObject] =
     useState<SelectedBIMObject | null>(null);
   const formatBIMValue = (value: unknown): string => {
@@ -185,6 +168,53 @@ function App() {
   const colourCommand = { enabled: colourByFieldView, entriesKey: colourEntries
     .map(entry => `${entry.modelId}:${entry.runtimeId}:${entry.color}`).sort().join("|") };
 
+  // Local natural-language search demonstrator. No external AI service or invented answers.
+  const aiText = aiSubmitted.trim().toLowerCase();
+  const aiPourMatch = aiSubmitted.match(/\b[0-9]+[a-z]+-[0-9]+\/[0-9]+\b/i)?.[0].toUpperCase() ?? "";
+  const aiStatus = /ncr|non.conform|failed|red/i.test(aiText) ? "NCR Created"
+    : /in.progress|ongoing|amber|outstanding|pending|incomplete|open/i.test(aiText) ? "In Progress"
+    : /complete|completed|passed|green/i.test(aiText) ? "Complete" : "";
+  const aiIfcMatch = ifcClasses.find(name => aiText.includes(name.toLowerCase()));
+  const aiLinked = pourLinks.map(link => ({
+    ...link,
+    form: fieldViewData?.forms.find(form => form.FormID === link.formId),
+    objects: allBIMObjects.filter(object => fullPourId(object) === link.fullPourId),
+  }));
+  const aiResults = aiText ? aiLinked.filter(item =>
+    (!aiPourMatch || item.fullPourId === aiPourMatch) &&
+    (!aiStatus || item.form?.Status === aiStatus) &&
+    (!aiIfcMatch || item.objects.some(object => object.ifcClass === aiIfcMatch))
+  ) : [];
+  const aiGeneralQuery = aiText && !aiPourMatch && !aiStatus && !aiIfcMatch
+    ? aiText.replace(/^(show|find|list|highlight|what|which|all|me|the|are|is|of|for|with|about|status|pours|pour|elements|objects|inspections|records|forms|fieldview|field view|please|summarise|summarize)\s+/g, "").trim() : "";
+  const aiForms = aiText && aiGeneralQuery && fieldViewData
+    ? fieldViewData.forms.filter(form => [form.FormID, form.FormTitle, form.FormName, form.Location, form.Status]
+        .some(value => (value ?? "").toLowerCase().includes(aiGeneralQuery))).slice(0, 30) : [];
+  const aiUnlinked = aiText && !aiStatus && !aiPourMatch && aiIfcMatch
+    ? allBIMObjects.filter(object => object.ifcClass === aiIfcMatch) : [];
+  const openAiPour = (pourId: string) => {
+    setTableSearch(pourId);
+    setIfcClassFilter("");
+    setPropertyColumnFilter("");
+    setPropertyValueFilter("");
+    setShowDataViewer(true);
+    setActiveTab("data");
+  };
+  const showAiIn3D = () => {
+    const ids = aiResults.map(item => item.fullPourId);
+    // The existing spreadsheet search filters by one pour; multiple pours are
+    // handled by the existing status-colouring control, not a new viewer API.
+    if (ids.length === 1) {
+      setTableSearch(ids[0]);
+      setIfcClassFilter(""); setPropertyColumnFilter(""); setPropertyValueFilter("");
+      setShowFilteredIn3D(true);
+      setShowDataViewer(true);
+      setActiveTab("data");
+    } else {
+      setColourByFieldView(true);
+      setActiveTab("dashboard");
+    }
+  };
   const clearTableFilters = () => {
     setTableSearch("");
     setIfcClassFilter("");
@@ -203,27 +233,9 @@ function App() {
       model.discipline === disciplineFilter;
     return matchesSearch && matchesDiscipline;
   });
-  // -------------------------------------------------------
-  // Load FieldView records
-  // -------------------------------------------------------
-  useEffect(() => {
-    const loadFieldViewData = async () => {
-      try {
-        const records =
-          await getFieldViewRecords();
-        setFieldViewRecords(records);
-      } catch (error) {
-        console.error(
-          "Could not load FieldView records:",
-          error
-        );
-      }
-    };
-    loadFieldViewData();
-  }, []);
   // Load the exported CSVs only when the Form Explorer is opened.
   useEffect(() => {
-    if ((activeTab !== "fieldview" && allBIMObjects.length === 0) || fieldViewData || fieldViewLoading || fieldViewError) return;
+    if ((activeTab !== "fieldview" && activeTab !== "ai" && allBIMObjects.length === 0) || fieldViewData || fieldViewLoading || fieldViewError) return;
     let active = true;
     setFieldViewLoading(true);
     loadFieldViewCSV().then(data => { if (active) setFieldViewData(data); })
@@ -418,61 +430,6 @@ function App() {
     }));
   };
   // -------------------------------------------------------
-  // Select mock BIM object
-  // -------------------------------------------------------
-  const selectModelObject = async (
-    guid: string
-  ) => {
-    setRealSelectedObject(null);
-    try {
-      setObjectLoading(true);
-      const objectResponse = await fetch(
-        `/api/model-objects/${encodeURIComponent(
-          guid
-        )}`
-      );
-      if (!objectResponse.ok) {
-        throw new Error(
-          `Model object request failed: ${objectResponse.status}`
-        );
-      }
-      const objectData =
-        await objectResponse.json();
-      setSelectedObject(
-        objectData.object
-      );
-      const relatedRecords =
-        await getFieldViewRecords(guid);
-      setFieldViewRecords(
-        relatedRecords
-      );
-    } catch (error) {
-      console.error(
-        "Could not select model object:",
-        error
-      );
-    } finally {
-      setObjectLoading(false);
-    }
-  };
-  // -------------------------------------------------------
-  // Clear BIM selection
-  // -------------------------------------------------------
-  const clearObjectSelection =
-    async () => {
-      try {
-        setSelectedObject(null);
-        const records =
-          await getFieldViewRecords();
-        setFieldViewRecords(records);
-      } catch (error) {
-        console.error(
-          "Could not reload FieldView records:",
-          error
-        );
-      }
-    };
-  // -------------------------------------------------------
   // Mock Asite import
   // -------------------------------------------------------
   const importAsiteModel = (
@@ -486,33 +443,6 @@ function App() {
         `The next step will send this request to our backend and simulate transferring the IFC into Trimble Connect.`
     );
   };
-  // -------------------------------------------------------
-  // FieldView placeholder
-  // -------------------------------------------------------
-  const openFieldView = (
-    record: FieldViewRecord
-  ) => {
-    alert(
-      `FieldView integration placeholder\n\n` +
-        `${record.id} - ${record.title}\n\n` +
-        `This will open the real FieldView record when the API integration is connected.`
-    );
-  };
-  // -------------------------------------------------------
-  // Dashboard calculations
-  // -------------------------------------------------------
-  const openNcrCount =
-    fieldViewRecords.filter(
-      (record) =>
-        record.type === "NCR" &&
-        record.status === "Open"
-    ).length;
-  const passedItpCount =
-    fieldViewRecords.filter(
-      (record) =>
-        record.type === "ITP" &&
-        record.status === "Passed"
-    ).length;
   // -------------------------------------------------------
   // UI
   // -------------------------------------------------------
@@ -568,10 +498,13 @@ function App() {
         <button type="button" className={activeTab === "fieldview" ? "dashboard-tab active" : "dashboard-tab"}
           aria-current={activeTab === "fieldview" ? "page" : undefined}
           onClick={() => setActiveTab("fieldview")}>FieldView Forms</button>
+        <button type="button" className={activeTab === "ai" ? "dashboard-tab active" : "dashboard-tab"}
+          aria-current={activeTab === "ai" ? "page" : undefined}
+          onClick={() => setActiveTab("ai")}>AI Search (demo)</button>
       </nav>
 
       {/* WORKSPACE */}
-      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={activeTab === "fieldview" ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
+      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={(activeTab === "fieldview" || activeTab === "ai") ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
         {/* LEFT COLUMN */}
         <div className="workspace-left" style={activeTab === "data" ? { display: showDataViewer ? "block" : "none", width: "100%" } : undefined}>
           {/* TRIMBLE VIEWER */}
@@ -598,7 +531,7 @@ function App() {
                 }}
                 onObjectSelected={(object) => {
                   setRealSelectedObject(object);
-                  if (object) setSelectedObject(null);
+                  
                 }}
               />
             </div>
@@ -802,83 +735,26 @@ function App() {
               </div>
             </div>
             <div className="information-content">
-              {/* MODEL COUNTS */}
+              {/* Summary from the loaded Trimble model and exported FieldView CSVs. */}
               <div className="summary-grid">
-                <div className="summary-card">
-                  <span>Elements</span>
-                  <strong>16</strong>
-                </div>
-                <div className="summary-card">
-                  <span>Walls</span>
-                  <strong>4</strong>
-                </div>
-                <div className="summary-card">
-                  <span>Beams</span>
-                  <strong>6</strong>
-                </div>
-                <div className="summary-card">
-                  <span>
-                    Footings
-                  </span>
-                  <strong>1</strong>
-                </div>
+                <div className="summary-card"><span>Loaded BIM elements</span><strong>{allBIMObjects.length}</strong></div>
+                <div className="summary-card"><span>FieldView forms (CSV)</span><strong>{fieldViewData ? fieldViewData.forms.length : "…"}</strong></div>
+                <div className="summary-card"><span>Demo-linked pours</span><strong>{new Set(pourLinks.map(link => link.fullPourId)).size}</strong></div>
+                <div className="summary-card"><span>Linked BIM elements</span><strong>{allBIMObjects.filter(object => pourLinks.some(link => link.fullPourId === fullPourId(object))).length}</strong></div>
               </div>
-              {/* TEMPORARY OBJECT SELECTION */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  marginTop: "14px",
-                  marginBottom: "14px",
-                  flexWrap: "wrap",
-                }}
-              >
-                <button
-                  className="trimble-connect-button"
-                  onClick={() =>
-                    selectModelObject(
-                      "demo-wall-001"
-                    )
-                  }
-                >
-                  Demo Select Wall
-                </button>
-                <button
-                  className="trimble-connect-button"
-                  onClick={() =>
-                    selectModelObject(
-                      "demo-beam-001"
-                    )
-                  }
-                >
-                  Demo Select Beam
-                </button>
-                {(selectedObject || realSelectedObject) && (
-                  <button
-                    onClick={() => {
-                      setRealSelectedObject(null);
-                      void clearObjectSelection();
-                    }}
-                  >
-                    Clear Selection
-                  </button>
-                )}
-              </div>
+              <p style={{ fontSize: 12, margin: "10px 0", color: "#64748b" }}>
+                FieldView forms come from the CSV export. BIM-to-form links are demonstration-only mappings.
+              </p>
+              {realSelectedObject && <button type="button" onClick={() => setRealSelectedObject(null)}>Clear selected element details</button>}
               {/* SELECTED OBJECT */}
               <div className="selected-object">
                 <div className="section-title">
                   Selected Object
                   <span className="mock-label">
-                    {realSelectedObject
-                      ? "Live Trimble data"
-                      : objectLoading
-                        ? "Loading..."
-                        : selectedObject
-                          ? "Demo selection"
-                          : "Awaiting selection"}
+                    {realSelectedObject ? "Live Trimble data" : "Awaiting selection"}
                   </span>
                 </div>
-                {!selectedObject && !realSelectedObject && (
+                {!realSelectedObject && (
                   <div className="empty-selection">
                     Select an object in
                     the 3D model to view
@@ -949,168 +825,35 @@ function App() {
                     ))}
                   </div>
                 )}
-                {selectedObject && (
-                  <div className="model-list">
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>
-                          Object
-                        </span>
-                        <strong>
-                          {
-                            selectedObject.name
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>
-                          IFC Type
-                        </span>
-                        <strong>
-                          {
-                            selectedObject.type
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>GUID</span>
-                        <strong>
-                          {
-                            selectedObject.guid
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>Level</span>
-                        <strong>
-                          {
-                            selectedObject.level
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>
-                          Material
-                        </span>
-                        <strong>
-                          {
-                            selectedObject.material
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                    <div className="model-row">
-                      <div className="model-details">
-                        <span>
-                          Discipline
-                        </span>
-                        <strong>
-                          {
-                            selectedObject.discipline
-                          }
-                        </strong>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           </section>
-          {/* FIELDVIEW */}
+          {/* Exported FieldView forms associated with the selected BIM element. */}
           <section className="panel field-panel">
             <div className="panel-header">
               <div>
-                <h2>
-                  Field Information
-                </h2>
-                <span>
-                  {realSelectedObject
-                    ? "Trimble FieldView (mock records, not linked to selected IFC object)"
-                    : selectedObject
-                      ? `Records linked to ${selectedObject.name}`
-                      : "Trimble FieldView"}
-                </span>
+                <h2>Field Information</h2>
+                <span>{realSelectedObject ? `Selected pour: ${selectedPourId || "No Full Pour ID"}` : "Select a BIM element to see linked inspections"}</span>
               </div>
-              <span className="mock-badge">
-                MOCK DATA
-              </span>
+              <span className="mock-badge">DEMO LINKS</span>
             </div>
             <div className="field-summary">
-              <div>
-                <span>
-                  ITPs Passed
-                </span>
-                <strong>
-                  {passedItpCount}
-                </strong>
-              </div>
-              <div>
-                <span>
-                  Open NCRs
-                </span>
-                <strong>
-                  {openNcrCount}
-                </strong>
-              </div>
-              <div>
-                <span>
-                  Total Records
-                </span>
-                <strong>
-                  {
-                    fieldViewRecords.length
-                  }
-                </strong>
-              </div>
+              <div><span>Exported forms</span><strong>{fieldViewData?.forms.length ?? "…"}</strong></div>
+              <div><span>Linked forms</span><strong>{realSelectedObject ? selectedPourLinks.length : "—"}</strong></div>
+              <div><span>Mock-linked pours</span><strong>{new Set(pourLinks.map(link => link.fullPourId)).size}</strong></div>
             </div>
             <div className="field-records">
-              {fieldViewRecords.length ===
-                0 && (
-                <div className="empty-selection">
-                  No FieldView records
-                  are associated with this
-                  BIM object.
-                </div>
-              )}
-              {fieldViewRecords.map(
-                (record) => (
-                  <button
-                    className="field-record"
-                    key={record.id}
-                    onClick={() =>
-                      openFieldView(
-                        record
-                      )
-                    }
-                  >
-                    <div className="record-type">
-                      {record.type}
-                    </div>
-                    <div className="record-main">
-                      <strong>
-                        {record.title}
-                      </strong>
-                      <span>
-                        {record.id} ·{" "}
-                        {record.date}
-                      </span>
-                    </div>
-                    <span
-                      className={`record-status ${record.status.toLowerCase()}`}
-                    >
-                      {record.status}
-                    </span>
-                  </button>
-                )
-              )}
+              {fieldViewError && <p style={{ color: "#b91c1c" }}>FieldView CSV load error: {fieldViewError}</p>}
+              {!realSelectedObject && <div className="empty-selection">Select an element in Trimble 3D or the Model Data spreadsheet to view its associated inspection forms.</div>}
+              {realSelectedObject && selectedPourLinks.length === 0 && <div className="empty-selection">No demonstration FieldView form is mapped to this element's Full Pour ID.</div>}
+              {selectedPourLinks.map(link => {
+                const form = fieldViewData?.forms.find(item => item.FormID === link.formId);
+                return <button className="field-record" key={`${link.fullPourId}-${link.formId}`} type="button" onClick={() => { setSelectedFormId(link.formId); setActiveTab("fieldview"); }}>
+                  <div className="record-type">FORM</div>
+                  <div className="record-main"><strong>{form?.FormName || form?.FormTitle || link.formId}</strong><span>{link.formId} · Full Pour ID {link.fullPourId} · Demonstration association</span></div>
+                  <span className="record-status">{form?.Status || (fieldViewLoading ? "Loading…" : "View form")}</span>
+                </button>;
+              })}
             </div>
           </section>
         </div>
@@ -1234,7 +977,7 @@ function App() {
                       key={`${object.modelId}-${object.runtimeId}`}
                       onClick={() => {
                         setRealSelectedObject(object);
-                        setSelectedObject(null);
+                        
                         setSelectionCommand(previous => ({
                           modelId: object.modelId,
                           runtimeId: object.runtimeId,
@@ -1271,6 +1014,64 @@ function App() {
           </div>
         </section>
       </main>
+      {activeTab === "ai" && (
+        <section className="panel" style={{ margin: 16, padding: 20, minWidth: 0 }}>
+          <div className="panel-header"><div><h2>BIM + FieldView Search</h2>
+            <span>Local natural-language search demonstrator · no external AI model or API calls</span></div></div>
+          <p>Ask about a Full Pour ID, inspection status, or IFC class. Results come from loaded BIM objects, exported FieldView forms and the demonstration mapping CSV.</p>
+          <form onSubmit={event => { event.preventDefault(); setAiSubmitted(aiQuery); }}
+            style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <input className="model-search" style={{ flex: "1 1 320px" }} value={aiQuery}
+              onChange={event => setAiQuery(event.target.value)}
+              placeholder="e.g. What is the status of pour 9HG-47/4?" aria-label="Search BIM and FieldView" />
+            <button type="submit" className="trimble-connect-button">Search</button>
+            <button type="button" onClick={() => { setAiQuery(""); setAiSubmitted(""); }}>Clear</button>
+          </form>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
+            {[
+              "What is the status of pour 9HG-47/4?",
+              "Show completed pours",
+              "Show pours with NCR",
+              "Show outstanding inspections",
+            ].map(example => <button key={example} type="button" onClick={() => { setAiQuery(example); setAiSubmitted(example); }}>{example}</button>)}
+          </div>
+          {fieldViewLoading && <p>Loading FieldView exports…</p>}
+          {fieldViewError && <p role="alert">FieldView data unavailable: {fieldViewError}</p>}
+          {aiText && <>
+            <h3>Search results</h3>
+            <p>{aiResults.length} matching demonstration pour links
+              {aiStatus ? ` · Status: ${aiStatus}` : ""}{aiPourMatch ? ` · Pour: ${aiPourMatch}` : ""}.
+              {allBIMObjects.length === 0 ? " Load a model in 3D Dashboard to match BIM elements." : ""}</p>
+            {aiResults.length > 0 && <button type="button" onClick={showAiIn3D} style={{ marginBottom: 12 }}>
+              {aiResults.length === 1 ? "Show matching pour in spreadsheet and 3D" : "Colour linked pours in 3D"}
+            </button>}
+            <div style={{ display: "grid", gap: 10 }}>
+              {aiResults.map(item => <div key={`${item.fullPourId}-${item.formId}`}
+                style={{ border: "1px solid #d6dbe0", borderRadius: 8, padding: 14 }}>
+                <strong>{item.fullPourId}</strong> · {item.form?.Status || "Status unavailable"}
+                <p style={{ margin: "6px 0" }}>{item.form?.FormTitle || item.form?.FormName || item.formId}
+                  {` · ${item.objects.length} matching BIM elements`}</p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => openAiPour(item.fullPourId)}>View BIM elements</button>
+                  <button type="button" onClick={() => { setSelectedFormId(item.formId); setActiveTab("fieldview"); }}>Open FieldView form {item.formId}</button>
+                </div>
+              </div>)}
+              {aiUnlinked.length > 0 && <p>{aiUnlinked.length} loaded BIM elements match IFC class {aiIfcMatch}. Use Model Data for the complete property view.</p>}
+              {aiForms.length > 0 && <div><h3>Matching exported forms</h3>{aiForms.map(form =>
+                <div key={form.FormID} style={{ padding: "7px 0", borderBottom: "1px solid #eee" }}>
+                  <button type="button" onClick={() => { setSelectedFormId(form.FormID); setActiveTab("fieldview"); }}>
+                    {form.FormID} · {form.FormTitle || form.FormName || "Untitled"} · {form.Status}
+                  </button>
+                </div>)}</div>}
+              {aiResults.length === 0 && aiForms.length === 0 && aiUnlinked.length === 0 &&
+                <p>No matching records found in the available data. Try a known Full Pour ID or one of the example questions. This demo supports a limited set of natural-language patterns.</p>}
+            </div>
+            <p style={{ fontSize: 12, color: "#666", marginTop: 16 }}>
+              Associations between Full Pour IDs and FieldView forms are demonstration-only, not verified project links. Search does not generate AI-written answers.
+            </p>
+          </>}
+        </section>
+      )}
       {activeTab === "fieldview" && (
         <section className="panel" style={{ margin: 16, padding: 20, minWidth: 0 }}>
           <div className="panel-header"><div><h2>FieldView Form Explorer</h2>
