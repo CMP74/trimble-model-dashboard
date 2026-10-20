@@ -18,9 +18,11 @@ type ObjectSelectionCommand = {
   runtimeId: number;
   sequence: number;
 };
+type ColourCommand = { enabled: boolean; entriesKey: string };
 type VisibilityCommand = { enabled: boolean; hiddenObjectIdsKey: string; visibleObjectIdsKey: string };
 type TrimbleViewerProps = {
   visibilityCommand?: VisibilityCommand;
+  colourCommand?: ColourCommand;
   modelCommand?: ModelCommand;
   selectionCommand?: ObjectSelectionCommand;
   onObjectSelected?: (object: SelectedBIMObject | null) => void;
@@ -33,6 +35,7 @@ function TrimbleViewer({
   modelCommand,
   selectionCommand,
   visibilityCommand,
+  colourCommand,
   onObjectSelected,
   onModelObjectsLoaded,
 }: TrimbleViewerProps) {
@@ -47,6 +50,7 @@ function TrimbleViewer({
   const selectionSequenceRef = useRef(0);
   const modelRequestSequenceRef = useRef(0);
   const visibilityQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const colouredObjectIdsRef = useRef<Map<string, number[]>>(new Map());
   const allModelEntityIdsRef = useRef<Map<string, number[]>>(new Map());
 
 
@@ -229,6 +233,49 @@ function TrimbleViewer({
       })
       .catch(error => console.error("[3D filter] Native isolation failed:", error));
   }, [visibilityCommand?.enabled, visibilityCommand?.visibleObjectIdsKey]);
+
+  useEffect(() => {
+    const API = apiRef.current;
+    if (!API || !colourCommand) return;
+    const grouped = new Map<string, Map<string, number[]>>();
+    if (colourCommand.enabled) {
+      for (const item of colourCommand.entriesKey.split("|")) {
+        if (!item) continue;
+        const last = item.lastIndexOf(":");
+        const first = item.lastIndexOf(":", last - 1);
+        if (first < 0 || last < 0) continue;
+        const modelId = item.slice(0, first);
+        const runtimeId = Number(item.slice(first + 1, last));
+        const color = item.slice(last + 1);
+        if (!Number.isInteger(runtimeId) || !/^#[0-9a-f]{6}$/i.test(color)) continue;
+        const byColor = grouped.get(modelId) ?? new Map<string, number[]>();
+        const ids = byColor.get(color) ?? [];
+        ids.push(runtimeId);
+        byColor.set(color, ids);
+        grouped.set(modelId, byColor);
+      }
+    }
+    visibilityQueueRef.current = visibilityQueueRef.current.catch(() => undefined).then(async () => {
+      // Reset previously coloured objects first, including when the toggle is disabled.
+      for (const [modelId, ids] of colouredObjectIdsRef.current) {
+        if (!ids.length) continue;
+        await API.viewer.setObjectState({ modelObjectIds: [{ modelId, objectRuntimeIds: ids }] },
+          { color: "reset" } as Parameters<typeof API.viewer.setObjectState>[1]);
+      }
+      colouredObjectIdsRef.current = new Map();
+      if (!colourCommand.enabled) return;
+      for (const [modelId, byColor] of grouped) {
+        const coloured: number[] = [];
+        for (const [color, ids] of byColor) {
+          // Object colour only; do not change visibility or isolation.
+          await API.viewer.setObjectState({ modelObjectIds: [{ modelId, objectRuntimeIds: ids }] },
+            { color } as Parameters<typeof API.viewer.setObjectState>[1]);
+          coloured.push(...ids);
+        }
+        colouredObjectIdsRef.current.set(modelId, coloured);
+      }
+    }).catch(error => console.error("Could not apply FieldView model colours:", error));
+  }, [colourCommand?.enabled, colourCommand?.entriesKey]);
 
   return <iframe ref={iframeRef} src={WorkspaceAPI.getConnectEmbedUrl()} title="Trimble Connect 3D Viewer" className="trimble-viewer" />;
 }

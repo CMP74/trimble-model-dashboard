@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+import { loadFieldViewCSV, loadPourFormLinks, getFormTables, type PourFormLink, type FieldViewData } from "./fieldviewService";
 import TrimbleViewer, {
   type SelectedBIMObject,
 } from "./components/TrimbleViewer";
@@ -29,7 +30,7 @@ function App() {
   // Authentication
   // -------------------------------------------------------
   // Layout only: keep the Trimble viewer mounted across tab changes.
-  const [activeTab, setActiveTab] = useState<"dashboard" | "data">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [tableSearch, setTableSearch] = useState("");
   const [ifcClassFilter, setIfcClassFilter] = useState("");
@@ -46,6 +47,24 @@ function App() {
   // -------------------------------------------------------
   const [fieldViewRecords, setFieldViewRecords] =
     useState<FieldViewRecord[]>([]);
+  const [fieldViewData, setFieldViewData] = useState<FieldViewData | null>(null);
+  const [fieldViewError, setFieldViewError] = useState("");
+  const [fieldViewLoading, setFieldViewLoading] = useState(false);
+  const [formSearch, setFormSearch] = useState("");
+  const [formStatus, setFormStatus] = useState("");
+  const [selectedFormId, setSelectedFormId] = useState<string | null>(null);
+  const [formPage, setFormPage] = useState(0);
+  const [pourLinks, setPourLinks] = useState<PourFormLink[]>([]);
+  const [colourByFieldView, setColourByFieldView] = useState(false);
+  const [pourLinkError, setPourLinkError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void loadPourFormLinks().then(links => { if (active) setPourLinks(links); })
+      .catch(error => { if (active) setPourLinkError(String(error)); });
+    return () => { active = false; };
+  }, []);
+
   // -------------------------------------------------------
   // Trimble models
   // -------------------------------------------------------
@@ -148,6 +167,24 @@ function App() {
     visibleObjectIdsKey,
   };
 
+  const fullPourId = (object: SelectedBIMObject): string => {
+    const match = object.propertyGroups.flatMap(group => group.properties)
+      .find(property => property.name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "fullpourid");
+    return match ? String(match.value ?? "").trim().toUpperCase() : "";
+  };
+  const selectedPourId = realSelectedObject ? fullPourId(realSelectedObject) : "";
+  const selectedPourLinks = pourLinks.filter(link => link.fullPourId === selectedPourId);
+  const colourEntries = allBIMObjects.flatMap(object => {
+    const pourId = fullPourId(object);
+    const link = pourLinks.find(item => item.fullPourId === pourId);
+    if (!link) return [];
+    const status = fieldViewData?.forms.find(form => form.FormID === link.formId)?.Status ?? "";
+    const color = status === "Complete" ? "#22C55E" : status === "In Progress" ? "#F59E0B" : status === "NCR Created" ? "#EF4444" : "";
+    return color ? [{ modelId: object.modelId, runtimeId: object.runtimeId, color }] : [];
+  });
+  const colourCommand = { enabled: colourByFieldView, entriesKey: colourEntries
+    .map(entry => `${entry.modelId}:${entry.runtimeId}:${entry.color}`).sort().join("|") };
+
   const clearTableFilters = () => {
     setTableSearch("");
     setIfcClassFilter("");
@@ -184,6 +221,28 @@ function App() {
     };
     loadFieldViewData();
   }, []);
+  // Load the exported CSVs only when the Form Explorer is opened.
+  useEffect(() => {
+    if ((activeTab !== "fieldview" && allBIMObjects.length === 0) || fieldViewData || fieldViewLoading || fieldViewError) return;
+    let active = true;
+    setFieldViewLoading(true);
+    loadFieldViewCSV().then(data => { if (active) setFieldViewData(data); })
+      .catch(error => { if (active) setFieldViewError(String(error)); })
+      .finally(() => { if (active) setFieldViewLoading(false); });
+    return () => { active = false; };
+  }, [activeTab, allBIMObjects.length, fieldViewData, fieldViewError]);
+  const matchingForms = (fieldViewData?.forms ?? []).filter(form =>
+    (!formStatus || form.Status === formStatus) &&
+    (!formSearch.trim() || [form.FormID, form.FormName, form.FormTitle, form.Location, form.OwnedBy, form.FormType]
+      .some(value => (value ?? "").toLowerCase().includes(formSearch.trim().toLowerCase())))
+  );
+  const selectedForm = fieldViewData?.forms.find(form => form.FormID === selectedFormId);
+  const selectedFormAnswers = [...(fieldViewData?.answersByForm.get(selectedFormId ?? "") ?? [])]
+    .sort((a, b) => Number(a.SortOrder || 0) - Number(b.SortOrder || 0));
+  const selectedFormTables = getFormTables(fieldViewData?.tablesByForm.get(selectedFormId ?? "") ?? []);
+  const selectedTask = selectedForm?.ParentProcessTaskID
+    ? fieldViewData?.tasksById.get(selectedForm.ParentProcessTaskID) : undefined;
+  // -------------------------------------------------------
   // -------------------------------------------------------
   // Load Trimble models
   // -------------------------------------------------------
@@ -506,10 +565,13 @@ function App() {
         >
           Model Data
         </button>
+        <button type="button" className={activeTab === "fieldview" ? "dashboard-tab active" : "dashboard-tab"}
+          aria-current={activeTab === "fieldview" ? "page" : undefined}
+          onClick={() => setActiveTab("fieldview")}>FieldView Forms</button>
       </nav>
 
       {/* WORKSPACE */}
-      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
+      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={activeTab === "fieldview" ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
         {/* LEFT COLUMN */}
         <div className="workspace-left" style={activeTab === "data" ? { display: showDataViewer ? "block" : "none", width: "100%" } : undefined}>
           {/* TRIMBLE VIEWER */}
@@ -530,6 +592,7 @@ function App() {
                 modelCommand={modelCommand}
                 selectionCommand={selectionCommand}
                 visibilityCommand={visibilityCommand}
+                colourCommand={colourCommand}
                 onModelObjectsLoaded={(modelId, objects) => {
                   setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
                 }}
@@ -539,6 +602,18 @@ function App() {
                 }}
               />
             </div>
+          </section>
+          <section className="panel" style={{ padding: 14, marginTop: 12 }}>
+            <h3 style={{ margin: "0 0 8px" }}>FieldView pour status — mock associations</h3>
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input type="checkbox" checked={colourByFieldView} onChange={event => setColourByFieldView(event.target.checked)} />
+              Colour model by linked FieldView status
+            </label>
+            <p style={{ margin: "8px 0", fontSize: 13 }}>
+              <span style={{ color: "#15803d" }}>● Complete</span> · <span style={{ color: "#b45309" }}>● In Progress</span> · <span style={{ color: "#dc2626" }}>● NCR Created</span>
+            </p>
+            <small>{colourEntries.length} model objects match the demonstration mappings. Unmapped elements retain their original appearance.</small>
+            {pourLinkError && <p style={{ color: "#b91c1c" }}>Could not load mock links: {pourLinkError}</p>}
           </section>
           {/* MODEL MANAGEMENT */}
           <section className="panel models-panel" style={activeTab === "data" ? { display: "none" } : undefined}>
@@ -833,6 +908,19 @@ function App() {
                         </div>
                       </div>
                     ))}
+                    <div style={{ padding: 12, border: "1px solid #b7c7d9", borderRadius: 8, marginTop: 12 }}>
+                      <strong>FieldView pour association (demonstration only)</strong>
+                      <p style={{ margin: "8px 0" }}>Full Pour ID: <strong>{selectedPourId || "Not found on this element"}</strong></p>
+                      {selectedPourLinks.length === 0 ? <p>No mock FieldView mapping for this pour.</p> : selectedPourLinks.map(link => {
+                        const form = fieldViewData?.forms.find(item => item.FormID === link.formId);
+                        return <div key={link.formId} style={{ marginTop: 8 }}>
+                          <strong>{form?.FormName || link.formId}</strong> · {form?.Status || "Loading form…"}
+                          <div><button type="button" onClick={() => {
+                            setSelectedFormId(link.formId); setActiveTab("fieldview");
+                          }}>Open FieldView form {link.formId}</button></div>
+                        </div>;
+                      })}
+                    </div>
                     {realSelectedObject.propertyGroups.map((group, index) => (
                       <details
                         key={`${group.name}-${index}`}
@@ -1183,6 +1271,80 @@ function App() {
           </div>
         </section>
       </main>
+      {activeTab === "fieldview" && (
+        <section className="panel" style={{ margin: 16, padding: 20, minWidth: 0 }}>
+          <div className="panel-header"><div><h2>FieldView Form Explorer</h2>
+            <span>Read-only reconstruction from four exported CSV tables · no live FieldView connection</span></div></div>
+          {fieldViewLoading && <p>Loading exported forms and answers…</p>}
+          {fieldViewError && <div role="alert"><p>Could not load CSV data: {fieldViewError}</p>
+            <button type="button" onClick={() => { setFieldViewError(""); setFieldViewData(null); }}>Retry</button></div>}
+          {fieldViewData && <>
+            <p style={{ margin: "12px 0" }}>{fieldViewData.forms.length.toLocaleString()} forms loaded · {fieldViewData.answersByForm.size.toLocaleString()} forms with answers · {fieldViewData.tablesByForm.size.toLocaleString()} forms with checklist tables</p>
+            {!selectedForm ? <>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                <input className="model-search" aria-label="Search FieldView forms" placeholder="Search form title, ID, location, owner…"
+                  value={formSearch} onChange={event => { setFormSearch(event.target.value); setFormPage(0); }} />
+                <select className="discipline-filter" aria-label="Filter form status" value={formStatus}
+                  onChange={event => { setFormStatus(event.target.value); setFormPage(0); }}>
+                  <option value="">All statuses</option>
+                  {[...new Set(fieldViewData.forms.map(form => form.Status).filter(Boolean))].sort().map(status => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <span style={{ alignSelf: "center" }}>{matchingForms.length.toLocaleString()} matches</span>
+              </div>
+              <div style={{ overflowX: "auto" }}><table className="model-data-table" style={{ width: "100%" }}>
+                <thead><tr><th>Form ID</th><th>Form</th><th>Status</th><th>Location</th><th>Owner</th><th>Created</th></tr></thead>
+                <tbody>{matchingForms.slice(formPage * 40, formPage * 40 + 40).map(form => <tr key={form.FormID}
+                  onClick={() => setSelectedFormId(form.FormID)} style={{ cursor: "pointer" }} title="Open reconstructed form">
+                  <td>{form.FormID}</td><td>{form.FormTitle || form.FormName || "Untitled form"}</td><td>{form.Status}</td>
+                  <td>{form.Location || "—"}</td><td>{form.OwnedBy || "—"}</td><td>{form.CreatedDate?.slice(0, 10) || "—"}</td>
+                </tr>)}</tbody>
+              </table></div>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
+                <button type="button" disabled={formPage === 0} onClick={() => setFormPage(page => page - 1)}>Previous</button>
+                <span>Page {formPage + 1} of {Math.max(1, Math.ceil(matchingForms.length / 40))}</span>
+                <button type="button" disabled={(formPage + 1) * 40 >= matchingForms.length} onClick={() => setFormPage(page => page + 1)}>Next</button>
+              </div>
+            </> : <>
+              <button type="button" onClick={() => setSelectedFormId(null)} style={{ margin: "12px 0" }}>← Back to forms</button>
+              <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 18 }}>
+                <h2 style={{ marginTop: 0 }}>{selectedForm.FormTitle || selectedForm.FormName || "Untitled form"}</h2>
+                <p><strong>{selectedForm.FormID}</strong> · {selectedForm.Status} · {selectedForm.FormType}</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 18, marginBottom: 16 }}>
+                  <span><strong>Location:</strong> {selectedForm.Location || "—"}</span>
+                  <span><strong>Owner:</strong> {selectedForm.OwnedBy || "—"}</span>
+                  <span><strong>Created:</strong> {selectedForm.CreatedDate || "—"}</span>
+                  <span><strong>Updated:</strong> {selectedForm.LastModified || "—"}</span>
+                </div>
+                {selectedForm.ParentProcessTaskID && <div style={{ padding: 12, background: "#f3f5f7", marginBottom: 18 }}>
+                  <strong>Related process task:</strong> {selectedForm.ParentProcessTaskID}
+                  {selectedTask ? <p>{selectedTask.ProcessName} / {selectedTask.TaskDescription} · {selectedTask.Status} · {selectedTask.LocationPath}</p>
+                    : <p>Task is not present in the supplied Process Details export.</p>}
+                </div>}
+                <h3>Questions and answers ({selectedFormAnswers.length})</h3>
+                {selectedFormAnswers.length === 0 && <p>No question records in this export.</p>}
+                {selectedFormAnswers.map((answer, index) => <div key={`${answer.FormAnswerID}-${index}`}
+                  style={{ borderBottom: "1px solid #e4e4e4", padding: "12px 0" }}>
+                  <div style={{ fontWeight: 600 }}>{answer.Question || answer.QuestionType || `Question ${index + 1}`}</div>
+                  <div style={{ marginTop: 4, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                    {answer.Answer || <em style={{ color: "#777" }}>Not answered</em>}</div>
+                  <small style={{ color: "#666" }}>{answer.QuestionType}{answer.AnsweredBy ? ` · ${answer.AnsweredBy}` : ""}
+                    {answer.AnsweredDateTime ? ` · ${answer.AnsweredDateTime}` : ""}</small>
+                </div>)}
+                {selectedFormTables.map(table => <section key={table.name} style={{ marginTop: 24 }}>
+                  <h3>{table.name} ({table.rows.length} rows)</h3>
+                  <div style={{ overflowX: "auto" }}><table className="model-data-table" style={{ width: "100%" }}>
+                    <thead><tr><th>Row</th>{table.columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+                    <tbody>{table.rows.map((row, index) => <tr key={`${row.rowNo}-${index}`}>
+                      <td>{row.rowNo}</td>{table.columns.map(column => <td key={column} style={{ whiteSpace: "pre-wrap" }}>{row[column] || "—"}</td>)}
+                    </tr>)}</tbody>
+                  </table></div>
+                </section>)}
+              </div>
+            </>}
+          </>}
+        </section>
+      )}
+
     </div>
   );
 }
