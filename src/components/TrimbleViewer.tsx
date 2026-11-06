@@ -26,6 +26,7 @@ type TrimbleViewerProps = {
   modelCommand?: ModelCommand;
   selectionCommand?: ObjectSelectionCommand;
   onObjectSelected?: (object: SelectedBIMObject | null) => void;
+  onObjectsSelected?: (objects: SelectedBIMObject[]) => void;
   onModelObjectsLoaded?: (modelId: string, objects: SelectedBIMObject[]) => void;
 };
 type TrimbleAPI = Awaited<ReturnType<typeof WorkspaceAPI.connect>>;
@@ -37,6 +38,7 @@ function TrimbleViewer({
   visibilityCommand,
   colourCommand,
   onObjectSelected,
+  onObjectsSelected,
   onModelObjectsLoaded,
 }: TrimbleViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -44,8 +46,10 @@ function TrimbleViewer({
   const pendingCommandRef = useRef<ModelCommand | null>(null);
   const lastCommandSequenceRef = useRef<number | null>(null);
   const onObjectSelectedRef = useRef(onObjectSelected);
+  const onObjectsSelectedRef = useRef(onObjectsSelected);
   const onModelObjectsLoadedRef = useRef(onModelObjectsLoaded);
   onObjectSelectedRef.current = onObjectSelected;
+  onObjectsSelectedRef.current = onObjectsSelected;
   onModelObjectsLoadedRef.current = onModelObjectsLoaded;
   const selectionSequenceRef = useRef(0);
   const modelRequestSequenceRef = useRef(0);
@@ -106,21 +110,28 @@ function TrimbleViewer({
         const API = await WorkspaceAPI.connect(iframe, (event: string, data: unknown) => {
           if (event !== "viewer.onSelectionChanged") return;
           const selection = data as SelectionEvent;
-          const selected = selection.data?.[0];
+          const selectedGroups = (selection.data ?? []).filter(item => item.objectRuntimeIds?.length);
           const requestSequence = ++selectionSequenceRef.current;
-          if (!selected || !selected.objectRuntimeIds?.length) {
+          if (!selectedGroups.length) {
+            onObjectsSelectedRef.current?.([]);
             onObjectSelectedRef.current?.(null);
             return;
           }
           const currentAPI = apiRef.current;
           if (!currentAPI) return;
-          void currentAPI.viewer.getObjectProperties(selected.modelId, selected.objectRuntimeIds)
-            .then(objects => {
-              if (cancelled || requestSequence !== selectionSequenceRef.current) return;
-              const object = objects[0];
-              onObjectSelectedRef.current?.(object ? mapObject(selected.modelId, object) : null);
-            })
-            .catch(error => console.error("Could not retrieve BIM properties:", error));
+          void Promise.all(selectedGroups.map(async group => {
+            const objects: SelectedBIMObject[] = [];
+            for (let index = 0; index < group.objectRuntimeIds.length; index += 100) {
+              const batch = await currentAPI.viewer.getObjectProperties(group.modelId, group.objectRuntimeIds.slice(index, index + 100));
+              objects.push(...batch.map(object => mapObject(group.modelId, object)));
+            }
+            return objects;
+          })).then(groups => {
+            if (cancelled || requestSequence !== selectionSequenceRef.current) return;
+            const objects = groups.flat();
+            onObjectsSelectedRef.current?.(objects);
+            onObjectSelectedRef.current?.(objects[0] ?? null);
+          }).catch(error => console.error("Could not retrieve selected BIM properties:", error));
         }, 30000);
         if (cancelled) return;
         const response = await fetch("/api/auth/viewer-token", { credentials: "same-origin", cache: "no-store" });

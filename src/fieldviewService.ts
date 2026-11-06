@@ -85,10 +85,12 @@ export function getFormTables(rows: CSVRow[]): { name: string; columns: string[]
 }
 
 // Demonstration-only mappings. Not verified FieldView-to-BIM relationships.
-export type PourFormLink = { fullPourId: string; formId: string };
+export type PourFormLink = { fullPourId: string; formId: string; recordType?: "ITP" | "NCR"; association?: "supplied-demo" | "generated-demo" };
 export async function loadPourFormLinks(): Promise<PourFormLink[]> {
   const rows = await readCSV('pour-form-links.csv');
   return rows.filter(row => row.FullPourID && row.FormID).map(row => ({
     fullPourId: row.FullPourID.trim().toUpperCase(), formId: row.FormID.trim(),
+    recordType: row.RecordType === "ITP" || row.RecordType === "NCR" ? row.RecordType : undefined,
+    association: "supplied-demo",
   }));
 }

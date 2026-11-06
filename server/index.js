@@ -490,6 +490,16 @@ app.get("/api/asite/models", (req, res) => {
   });
 });
 
+// Asite OAuth integration readiness only. No browser-held Asite credentials,
+// session-cookie reuse, or unauthenticated document proxying.
+app.get("/api/asite/connection", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({
+    configured: false,
+    message: "Asite Microsoft SSO API access requires an approved OAuth client registration. Live document listing is not yet enabled.",
+  });
+});
+
 // ---------------------------------------------------------
 // Start server
 // ---------------------------------------------------------

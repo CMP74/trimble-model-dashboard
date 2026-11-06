@@ -8,16 +8,12 @@ import {
   getModels,
   type ModelItem,
 } from "./services/modelService";
-import {
-  getAsiteModels,
-  type AsiteModel,
-} from "./services/asiteService";
 function App() {
   // -------------------------------------------------------
   // Authentication
   // -------------------------------------------------------
   // Layout only: keep the Trimble viewer mounted across tab changes.
-  const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview" | "ai">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview" | "ai" | "asite">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [aiQuery, setAiQuery] = useState("");
   const [aiSubmitted, setAiSubmitted] = useState("");
@@ -71,19 +67,16 @@ function App() {
   const [modelSearch, setModelSearch] = useState("");
   const [disciplineFilter, setDisciplineFilter] =
     useState("All disciplines");
-  // -------------------------------------------------------
-  // Asite models
-  // -------------------------------------------------------
-  const [asiteModels, setAsiteModels] = useState<
-    AsiteModel[]
-  >([]);
-  const [asiteLoading, setAsiteLoading] =
-    useState(true);
+  // Asite connector status: explicitly read-only, with no simulated live data.
+  const [asiteConnection, setAsiteConnection] = useState<"checking" | "not-configured" | "unavailable">("checking");
+  const [asiteMessage, setAsiteMessage] = useState("");
+  const [asiteCheckSequence, setAsiteCheckSequence] = useState(0);
   // -------------------------------------------------------
   // Selected BIM object
   // -------------------------------------------------------
   const [realSelectedObject, setRealSelectedObject] =
     useState<SelectedBIMObject | null>(null);
+  const [selectedBIMObjects, setSelectedBIMObjects] = useState<SelectedBIMObject[]>([]);
   const formatBIMValue = (value: unknown): string => {
     if (value === null || value === undefined) return "—";
     if (typeof value === "object") return JSON.stringify(value);
@@ -155,19 +148,92 @@ function App() {
       .find(property => property.name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "fullpourid");
     return match ? String(match.value ?? "").trim().toUpperCase() : "";
   };
+  // Preserve the three supplied demonstration links; generate additional *clearly
+  // labelled* demo associations only for pour IDs actually found in the model.
+  // These are NOT verified FieldView-to-BIM relationships.
+  const pourIds = Array.from(new Set(allBIMObjects.map(fullPourId).filter(Boolean))).sort();
+  const existingPourIds = new Set(pourLinks.map(link => link.fullPourId));
+  const itpForms = (fieldViewData?.forms ?? []).filter(form =>
+    form.FormType === "Reinforced Concrete ITP Forms" && !!form.FormID);
+  const completeItpForms = itpForms.filter(form => /^(complete|complete - archived|closed)$/i.test(form.Status ?? ""));
+  const activeItpForms = itpForms.filter(form => !/^(complete|complete - archived|closed)$/i.test(form.Status ?? ""));
+  const ncrForms = (fieldViewData?.forms ?? []).filter(form =>
+    /ncr/i.test(form.FormType ?? "") && !!form.FormID);
+  const generatedPourLinks: PourFormLink[] = pourIds.flatMap((pourId, index) => {
+    if (existingPourIds.has(pourId) || !itpForms.length) return [];
+    const candidates = index % 4 === 0 && completeItpForms.length ? completeItpForms : activeItpForms.length ? activeItpForms : itpForms;
+    const itp = candidates[index % candidates.length];
+    const links: PourFormLink[] = [{ fullPourId: pourId, formId: itp.FormID, recordType: "ITP", association: "generated-demo" }];
+    // A minority of pours receive an additional NCR to demonstrate precedence.
+    if (ncrForms.length && index % 7 === 3) {
+      links.push({ fullPourId: pourId, formId: ncrForms[Math.floor(index / 7) % ncrForms.length].FormID,
+        recordType: "NCR", association: "generated-demo" });
+    }
+    return links;
+  });
+  const effectivePourLinks = [...pourLinks, ...generatedPourLinks];
   const selectedPourId = realSelectedObject ? fullPourId(realSelectedObject) : "";
-  const selectedPourLinks = pourLinks.filter(link => link.fullPourId === selectedPourId);
+  const selectedPourLinks = effectivePourLinks.filter(link => link.fullPourId === selectedPourId);
+  const formById = new Map((fieldViewData?.forms ?? []).map(form => [form.FormID, form]));
+  const getInspectionState = (pourId: string): "NCR" | "Complete" | "In Progress" | "Unlinked" => {
+    const links = effectivePourLinks.filter(link => link.fullPourId === pourId);
+    if (!links.length) return "Unlinked";
+    // Any NCR that is not closed takes precedence over the ITP completion.
+    const openNcr = links.some(link => {
+      const form = formById.get(link.formId);
+      const isNcr = link.recordType === "NCR" || /ncr/i.test(form?.FormType ?? "") || /ncr created|non.conform/i.test(form?.Status ?? "");
+      return isNcr && !/^(closed|complete|complete - archived|ncr qa accepted)/i.test(form?.Status ?? "");
+    });
+    if (openNcr) return "NCR";
+    const itps = links.filter(link => link.recordType !== "NCR" && !/ncr/i.test(formById.get(link.formId)?.FormType ?? ""));
+    return itps.length && itps.every(link => /^(complete|complete - archived|closed)$/i.test(formById.get(link.formId)?.Status ?? ""))
+      ? "Complete" : "In Progress";
+  };
   const colourEntries = allBIMObjects.flatMap(object => {
     const pourId = fullPourId(object);
-    const link = pourLinks.find(item => item.fullPourId === pourId);
-    if (!link) return [];
-    const status = fieldViewData?.forms.find(form => form.FormID === link.formId)?.Status ?? "";
-    const color = status === "Complete" ? "#22C55E" : status === "In Progress" ? "#F59E0B" : status === "NCR Created" ? "#EF4444" : "";
+    if (!pourId) return [];
+    const status = getInspectionState(pourId);
+    const color = status === "Complete" ? "#22C55E" : status === "In Progress" ? "#F59E0B" : status === "NCR" ? "#EF4444" : "";
     return color ? [{ modelId: object.modelId, runtimeId: object.runtimeId, color }] : [];
   });
   const colourCommand = { enabled: colourByFieldView, entriesKey: colourEntries
     .map(entry => `${entry.modelId}:${entry.runtimeId}:${entry.color}`).sort().join("|") };
 
+  // Selected model quantities: use one consistent volume property per object,
+  // avoid mixing gross and net, and report missing quantities explicitly.
+  const selectedUnique = Array.from(new Map(selectedBIMObjects.map(object =>
+    [`${object.modelId}:${object.runtimeId}`, object] as const)).values());
+  const findVolume = (object: SelectedBIMObject): number | null => {
+    const props = object.propertyGroups.flatMap(group => group.properties);
+    for (const name of ["NetVolume", "GrossVolume", "Volume"]) {
+      const prop = props.find(item => item.name.replace(/[^a-z0-9]/gi, "").toLowerCase() === name.toLowerCase());
+      if (!prop) continue;
+      const raw = String(prop.value ?? "").trim();
+      const match = raw.match(/^(-?\d+(?:[.,]\d+)?)\s*(m³|m3|cubic metres|cubic meters)?$/i);
+      if (match) {
+        const value = Number(match[1].replace(",", "."));
+        if (Number.isFinite(value) && value >= 0) return value;
+      }
+    }
+    return null;
+  };
+  const volumeValues = selectedUnique.map(findVolume);
+  const totalVolume = volumeValues.reduce<number>((sum, volume) => sum + (volume ?? 0), 0);
+  const volumeMissing = volumeValues.filter(volume => volume === null).length;
+  const typeCounts = Array.from(selectedUnique.reduce((map, object) => {
+    map.set(object.ifcClass, (map.get(object.ifcClass) ?? 0) + 1);
+    return map;
+  }, new Map<string, number>()).entries());
+  const materialCounts = Array.from(selectedUnique.reduce((map, object) => {
+    const material = getBIMProperty(object, "Material") || "Not specified";
+    map.set(material, (map.get(material) ?? 0) + 1);
+    return map;
+  }, new Map<string, number>()).entries());
+  const selectedPourIds = Array.from(new Set(selectedUnique.map(fullPourId).filter(Boolean)));
+  const selectedInspectionCounts = selectedPourIds.reduce((counts, id) => {
+    counts[getInspectionState(id)]++;
+    return counts;
+  }, { NCR: 0, Complete: 0, "In Progress": 0, Unlinked: 0 });
   // Local natural-language search demonstrator. No external AI service or invented answers.
   const aiText = aiSubmitted.trim().toLowerCase();
   const aiPourMatch = aiSubmitted.match(/\b[0-9]+[a-z]+-[0-9]+\/[0-9]+\b/i)?.[0].toUpperCase() ?? "";
@@ -175,7 +241,7 @@ function App() {
     : /in.progress|ongoing|amber|outstanding|pending|incomplete|open/i.test(aiText) ? "In Progress"
     : /complete|completed|passed|green/i.test(aiText) ? "Complete" : "";
   const aiIfcMatch = ifcClasses.find(name => aiText.includes(name.toLowerCase()));
-  const aiLinked = pourLinks.map(link => ({
+  const aiLinked = effectivePourLinks.map(link => ({
     ...link,
     form: fieldViewData?.forms.find(form => form.FormID === link.formId),
     objects: allBIMObjects.filter(object => fullPourId(object) === link.fullPourId),
@@ -284,26 +350,27 @@ function App() {
     };
     loadModels();
   }, []);
-  // -------------------------------------------------------
-  // Load Asite models
-  // -------------------------------------------------------
+  // Asite connection readiness; no credentials are sent from the browser.
   useEffect(() => {
-    const loadAsiteModels = async () => {
-      try {
-        setAsiteLoading(true);
-        const data = await getAsiteModels();
-        setAsiteModels(data);
-      } catch (error) {
-        console.error(
-          "Could not load Asite models:",
-          error
-        );
-      } finally {
-        setAsiteLoading(false);
-      }
-    };
-    loadAsiteModels();
-  }, []);
+    let cancelled = false;
+    setAsiteConnection("checking");
+    fetch("/api/asite/connection", { cache: "no-store" })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}`);
+        return response.json() as Promise<{ configured: boolean; message?: string }>;
+      })
+      .then(data => {
+        if (cancelled) return;
+        setAsiteConnection(data.configured ? "unavailable" : "not-configured");
+        setAsiteMessage(data.message ?? "Asite OAuth integration has not been configured.");
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setAsiteConnection("unavailable");
+        setAsiteMessage(error instanceof Error ? error.message : "Backend unavailable");
+      });
+    return () => { cancelled = true; };
+  }, [asiteCheckSequence]);
   // -------------------------------------------------------
   // Trimble OAuth callback
   // -------------------------------------------------------
@@ -430,20 +497,6 @@ function App() {
     }));
   };
   // -------------------------------------------------------
-  // Mock Asite import
-  // -------------------------------------------------------
-  const importAsiteModel = (
-    model: AsiteModel
-  ) => {
-    alert(
-      `Asite → Trimble import placeholder\n\n` +
-        `${model.name}\n` +
-        `Revision: ${model.revision}\n` +
-        `Discipline: ${model.discipline}\n\n` +
-        `The next step will send this request to our backend and simulate transferring the IFC into Trimble Connect.`
-    );
-  };
-  // -------------------------------------------------------
   // UI
   // -------------------------------------------------------
   return (
@@ -501,10 +554,13 @@ function App() {
         <button type="button" className={activeTab === "ai" ? "dashboard-tab active" : "dashboard-tab"}
           aria-current={activeTab === "ai" ? "page" : undefined}
           onClick={() => setActiveTab("ai")}>AI Search (demo)</button>
+        <button type="button" className={activeTab === "asite" ? "dashboard-tab active" : "dashboard-tab"}
+          aria-current={activeTab === "asite" ? "page" : undefined}
+          onClick={() => setActiveTab("asite")}>Asite Model Sync</button>
       </nav>
 
       {/* WORKSPACE */}
-      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={(activeTab === "fieldview" || activeTab === "ai") ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
+      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={(activeTab === "fieldview" || activeTab === "ai" || activeTab === "asite") ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
         {/* LEFT COLUMN */}
         <div className="workspace-left" style={activeTab === "data" ? { display: showDataViewer ? "block" : "none", width: "100%" } : undefined}>
           {/* TRIMBLE VIEWER */}
@@ -529,23 +585,23 @@ function App() {
                 onModelObjectsLoaded={(modelId, objects) => {
                   setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
                 }}
-                onObjectSelected={(object) => {
-                  setRealSelectedObject(object);
-                  
+                onObjectsSelected={(objects) => {
+                  setSelectedBIMObjects(objects);
+                  setRealSelectedObject(objects[0] ?? null);
                 }}
               />
             </div>
           </section>
           <section className="panel" style={{ padding: 14, marginTop: 12 }}>
-            <h3 style={{ margin: "0 0 8px" }}>FieldView pour status — mock associations</h3>
+            <h3 style={{ margin: "0 0 8px" }}>FieldView pour inspection status — demonstration associations</h3>
             <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input type="checkbox" checked={colourByFieldView} onChange={event => setColourByFieldView(event.target.checked)} />
               Colour model by linked FieldView status
             </label>
             <p style={{ margin: "8px 0", fontSize: 13 }}>
-              <span style={{ color: "#15803d" }}>● Complete</span> · <span style={{ color: "#b45309" }}>● In Progress</span> · <span style={{ color: "#dc2626" }}>● NCR Created</span>
+              <span style={{ color: "#15803d" }}>● Complete</span> · <span style={{ color: "#b45309" }}>● In Progress</span> · <span style={{ color: "#dc2626" }}>● Open NCR (overrides ITP)</span>
             </p>
-            <small>{colourEntries.length} model objects match the demonstration mappings. Unmapped elements retain their original appearance.</small>
+            <small>{colourEntries.length} model objects have demonstration inspection links across {new Set(effectivePourLinks.map(link => link.fullPourId)).size} pours. Links are illustrative, not verified. Unmapped elements retain their original appearance.</small>
             {pourLinkError && <p style={{ color: "#b91c1c" }}>Could not load mock links: {pourLinkError}</p>}
           </section>
           {/* MODEL MANAGEMENT */}
@@ -643,80 +699,6 @@ function App() {
                     )
                   )}
               </div>
-              {/* ASITE MODELS */}
-              <div
-                style={{
-                  marginTop: "22px",
-                  paddingTop: "18px",
-                  borderTop:
-                    "1px solid #dddddd",
-                }}
-              >
-                <div className="section-title">
-                  Available from Asite
-                  <span className="mock-label">
-                    MOCK DATA
-                  </span>
-                </div>
-                <div className="model-list">
-                  {asiteLoading && (
-                    <div className="model-row">
-                      Loading Asite
-                      models...
-                    </div>
-                  )}
-                  {!asiteLoading &&
-                    asiteModels.length ===
-                      0 && (
-                      <div className="model-row">
-                        No Asite models
-                        available.
-                      </div>
-                    )}
-                  {!asiteLoading &&
-                    asiteModels.map(
-                      (model) => (
-                        <div
-                          className="model-row"
-                          key={model.id}
-                        >
-                          <div className="model-details">
-                            <strong>
-                              {model.name}
-                            </strong>
-                            <span>
-                              {
-                                model.discipline
-                              }{" "}
-                              · Rev{" "}
-                              {model.revision} ·{" "}
-                              {model.size}
-                            </span>
-                            <span>
-                              {
-                                model.status
-                              }{" "}
-                              · Modified{" "}
-                              {
-                                model.modifiedDate
-                              }
-                            </span>
-                          </div>
-                          <button
-                            className="trimble-connect-button"
-                            onClick={() =>
-                              importAsiteModel(
-                                model
-                              )
-                            }
-                          >
-                            Import
-                          </button>
-                        </div>
-                      )
-                    )}
-                </div>
-              </div>
             </div>
           </section>
         </div>
@@ -739,13 +721,31 @@ function App() {
               <div className="summary-grid">
                 <div className="summary-card"><span>Loaded BIM elements</span><strong>{allBIMObjects.length}</strong></div>
                 <div className="summary-card"><span>FieldView forms (CSV)</span><strong>{fieldViewData ? fieldViewData.forms.length : "…"}</strong></div>
-                <div className="summary-card"><span>Demo-linked pours</span><strong>{new Set(pourLinks.map(link => link.fullPourId)).size}</strong></div>
-                <div className="summary-card"><span>Linked BIM elements</span><strong>{allBIMObjects.filter(object => pourLinks.some(link => link.fullPourId === fullPourId(object))).length}</strong></div>
+                <div className="summary-card"><span>Demo-linked pours</span><strong>{new Set(effectivePourLinks.map(link => link.fullPourId)).size}</strong></div>
+                <div className="summary-card"><span>Linked BIM elements</span><strong>{allBIMObjects.filter(object => effectivePourLinks.some(link => link.fullPourId === fullPourId(object))).length}</strong></div>
               </div>
               <p style={{ fontSize: 12, margin: "10px 0", color: "#64748b" }}>
-                FieldView forms come from the CSV export. BIM-to-form links are demonstration-only mappings.
+                FieldView forms come from the CSV export. BIM-to-form links are demonstration-only mappings, including automatically generated associations for pours without supplied links.
               </p>
-              {realSelectedObject && <button type="button" onClick={() => setRealSelectedObject(null)}>Clear selected element details</button>}
+              {realSelectedObject && <button type="button" onClick={() => { setRealSelectedObject(null); setSelectedBIMObjects([]); }}>Clear selected element details</button>}
+              <div className="selected-object" style={{ marginTop: 14, padding: 12 }}>
+                <div className="section-title">Selected objects — combined quantities and inspections</div>
+                <div className="summary-grid">
+                  <div className="summary-card"><span>Selected objects</span><strong>{selectedUnique.length}</strong></div>
+                  <div className="summary-card"><span>Volume (available m³)</span><strong>{volumeValues.every(v => v === null) ? "Not available" : totalVolume.toFixed(3)}</strong></div>
+                  <div className="summary-card"><span>Unique pours</span><strong>{selectedPourIds.length}</strong></div>
+                  <div className="summary-card"><span>Missing volume</span><strong>{volumeMissing} objects</strong></div>
+                </div>
+                {selectedUnique.length > 0 && <>
+                  <p><strong>IFC types:</strong> {typeCounts.map(([type, count]) => `${type}: ${count}`).join(" · ")}</p>
+                  <p><strong>Materials:</strong> {materialCounts.map(([material, count]) => `${material}: ${count}`).join(" · ")}</p>
+                  <p><strong>Pour inspection summary:</strong> <span style={{ color: "#15803d" }}>{selectedInspectionCounts.Complete} complete</span> · <span style={{ color: "#b45309" }}>{selectedInspectionCounts["In Progress"]} in progress</span> · <span style={{ color: "#dc2626" }}>{selectedInspectionCounts.NCR} open NCR</span> · {selectedInspectionCounts.Unlinked} unlinked</p>
+                  <small>Quantities are derived from available IFC NetVolume, GrossVolume or Volume properties, assumed m³ only when no unit is supplied. Missing values are excluded; totals may be partial. Inspection links are demonstration-only.</small>
+                  {selectedPourIds.map(id => <div key={id} style={{ marginTop: 8 }}><strong>{id}</strong> — {getInspectionState(id)} {effectivePourLinks.filter(link => link.fullPourId === id).map(link =>
+                    <button key={`${id}-${link.formId}`} type="button" style={{ marginLeft: 8 }} onClick={() => { setSelectedFormId(link.formId); setActiveTab("fieldview"); }}>{link.recordType || "Form"}: {link.formId}</button>)}</div>)}
+                </>}
+                {!selectedUnique.length && <p>Select one or multiple objects in the 3D viewer to see their combined quantities and inspection statuses.</p>}
+              </div>
               {/* SELECTED OBJECT */}
               <div className="selected-object">
                 <div className="section-title">
@@ -787,10 +787,10 @@ function App() {
                     <div style={{ padding: 12, border: "1px solid #b7c7d9", borderRadius: 8, marginTop: 12 }}>
                       <strong>FieldView pour association (demonstration only)</strong>
                       <p style={{ margin: "8px 0" }}>Full Pour ID: <strong>{selectedPourId || "Not found on this element"}</strong></p>
-                      {selectedPourLinks.length === 0 ? <p>No mock FieldView mapping for this pour.</p> : selectedPourLinks.map(link => {
+                      {selectedPourLinks.length === 0 ? <p>No demonstration FieldView mapping for this pour.</p> : selectedPourLinks.map(link => {
                         const form = fieldViewData?.forms.find(item => item.FormID === link.formId);
                         return <div key={link.formId} style={{ marginTop: 8 }}>
-                          <strong>{form?.FormName || link.formId}</strong> · {form?.Status || "Loading form…"}
+                          <strong>{form?.FormName || link.formId}</strong> · {link.recordType || "Form"} · {form?.Status || "Loading form…"} · {link.association === "generated-demo" ? "Generated demonstration link" : "Supplied demonstration link"}
                           <div><button type="button" onClick={() => {
                             setSelectedFormId(link.formId); setActiveTab("fieldview");
                           }}>Open FieldView form {link.formId}</button></div>
@@ -840,7 +840,7 @@ function App() {
             <div className="field-summary">
               <div><span>Exported forms</span><strong>{fieldViewData?.forms.length ?? "…"}</strong></div>
               <div><span>Linked forms</span><strong>{realSelectedObject ? selectedPourLinks.length : "—"}</strong></div>
-              <div><span>Mock-linked pours</span><strong>{new Set(pourLinks.map(link => link.fullPourId)).size}</strong></div>
+              <div><span>Mock-linked pours</span><strong>{new Set(effectivePourLinks.map(link => link.fullPourId)).size}</strong></div>
             </div>
             <div className="field-records">
               {fieldViewError && <p style={{ color: "#b91c1c" }}>FieldView CSV load error: {fieldViewError}</p>}
@@ -849,8 +849,8 @@ function App() {
               {selectedPourLinks.map(link => {
                 const form = fieldViewData?.forms.find(item => item.FormID === link.formId);
                 return <button className="field-record" key={`${link.fullPourId}-${link.formId}`} type="button" onClick={() => { setSelectedFormId(link.formId); setActiveTab("fieldview"); }}>
-                  <div className="record-type">FORM</div>
-                  <div className="record-main"><strong>{form?.FormName || form?.FormTitle || link.formId}</strong><span>{link.formId} · Full Pour ID {link.fullPourId} · Demonstration association</span></div>
+                  <div className="record-type">{link.recordType || "FORM"}</div>
+                  <div className="record-main"><strong>{form?.FormName || form?.FormTitle || link.formId}</strong><span>{link.formId} · Full Pour ID {link.fullPourId} · {link.association === "generated-demo" ? "Generated demonstration association" : "Supplied demonstration association"}</span></div>
                   <span className="record-status">{form?.Status || (fieldViewLoading ? "Loading…" : "View form")}</span>
                 </button>;
               })}
@@ -1014,6 +1014,31 @@ function App() {
           </div>
         </section>
       </main>
+      {activeTab === "asite" && (
+        <section className="panel" style={{ margin: 20, padding: 24, maxWidth: 1100 }}>
+          <h2>Asite Model Sync</h2>
+          <p>Read-only integration setup for <strong>adoddleak.asite.com</strong>. This tab does not transfer, upload, or modify models.</p>
+          <div style={{ padding: 16, border: "1px solid #d1d5db", borderRadius: 8, marginBottom: 20 }}>
+            <h3>API connection</h3>
+            <p><strong>Status:</strong> {asiteConnection === "checking" ? "Checking backend…" : asiteConnection === "not-configured" ? "Not connected — Asite OAuth access required" : "Connection not available"}</p>
+            <p>{asiteMessage}</p>
+            <button type="button" onClick={() => setAsiteCheckSequence(n => n + 1)}>Check connection again</button>
+          </div>
+          <h3>Initial test documents</h3>
+          <p>These two records were transcribed from your Asite screenshot, <strong>not retrieved through the API</strong>. They are shown only to define and test the approval rule.</p>
+          <div style={{ overflowX: "auto" }}>
+            <table className="model-data-table" style={{ width: "100%" }}>
+              <thead><tr><th>Document reference</th><th>Revision</th><th>Purpose of issue</th><th>Asite status</th><th>Sync eligibility</th><th>Trimble comparison</th></tr></thead>
+              <tbody>
+                <tr><td>02_BIMcollab_Example_STR_optimized</td><td>1</td><td>S2 – For Information</td><td>A – Approved</td><td>Eligible for comparison</td><td>Awaiting live Asite file metadata</td></tr>
+                <tr><td>0001</td><td>1</td><td>A2 – Authorised Concept Design</td><td>Prepublished</td><td>Blocked</td><td>Not applicable</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style={{ marginTop: 20 }}><strong>Next step:</strong> Register or enable an Asite API client for Microsoft SSO, then securely connect the backend to list documents and retrieve revision/status metadata. We will compare actual Asite file identities against Trimble Connect before enabling manual sync.</p>
+          <p><strong>Approval rule:</strong> Only <em>A – Approved</em> documents are candidates. Purpose of Issue is displayed separately and does not override the approval status.</p>
+        </section>
+      )}
       {activeTab === "ai" && (
         <section className="panel" style={{ margin: 16, padding: 20, minWidth: 0 }}>
           <div className="panel-header"><div><h2>BIM + FieldView Search</h2>
