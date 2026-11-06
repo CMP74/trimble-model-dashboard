@@ -189,6 +189,31 @@ function App() {
     return itps.length && itps.every(link => /^(complete|complete - archived|closed)$/i.test(formById.get(link.formId)?.Status ?? ""))
       ? "Complete" : "In Progress";
   };
+  // Model-wide inspection summary, counted by distinct Full Pour ID rather than BIM object.
+  // ITP completion is calculated independently of NCR precedence: a completed ITP
+  // may still have an open NCR, which correctly takes priority in the 3D colours.
+  const inspectionCounts = pourIds.reduce((counts, id) => {
+    counts[getInspectionState(id)] += 1;
+    return counts;
+  }, { NCR: 0, Complete: 0, "In Progress": 0, Unlinked: 0 });
+  const itpProgress = pourIds.reduce((counts, id) => {
+    const itpLinks = effectivePourLinks.filter(link => link.fullPourId === id &&
+      link.recordType !== "NCR" && !/ncr/i.test(formById.get(link.formId)?.FormType ?? ""));
+    if (!itpLinks.length) return counts;
+    counts.total += 1;
+    if (itpLinks.every(link => /^(complete|complete - archived|closed)$/i.test(formById.get(link.formId)?.Status ?? ""))) {
+      counts.complete += 1;
+    }
+    return counts;
+  }, { complete: 0, total: 0 });
+  const itpCompletionPercent = itpProgress.total ? Math.round(itpProgress.complete / itpProgress.total * 100) : null;
+  // Export-wide completion is a separate, factual metric based on actual FieldView
+  // ITP records; unlike the model-linked measure, it does not depend on demo links.
+  const exportedItpComplete = completeItpForms.length;
+  const exportedItpPercent = itpForms.length ? (exportedItpComplete / itpForms.length * 100) : null;
+  const unresolvedItpLinks = effectivePourLinks.filter(link =>
+    link.recordType !== "NCR" && !formById.has(link.formId));
+  const objectsWithoutPourId = allBIMObjects.filter(object => !fullPourId(object)).length;
   const colourEntries = allBIMObjects.flatMap(object => {
     const pourId = fullPourId(object);
     if (!pourId) return [];
@@ -592,17 +617,69 @@ function App() {
               />
             </div>
           </section>
-          <section className="panel" style={{ padding: 14, marginTop: 12 }}>
-            <h3 style={{ margin: "0 0 8px" }}>FieldView pour inspection status — demonstration associations</h3>
-            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input type="checkbox" checked={colourByFieldView} onChange={event => setColourByFieldView(event.target.checked)} />
-              Colour model by linked FieldView status
-            </label>
-            <p style={{ margin: "8px 0", fontSize: 13 }}>
-              <span style={{ color: "#15803d" }}>● Complete</span> · <span style={{ color: "#b45309" }}>● In Progress</span> · <span style={{ color: "#dc2626" }}>● Open NCR (overrides ITP)</span>
+          <section className="panel" style={{ padding: 20, marginTop: 12 }} aria-label="FieldView pour inspection status">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h3 style={{ margin: "0 0 5px", fontSize: 19 }}>FieldView Pour Inspection Status</h3>
+                <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>Model-wide status by unique Full Pour ID · demonstration associations</p>
+              </div>
+              <label style={{ display: "flex", gap: 9, alignItems: "center", fontWeight: 600, cursor: "pointer", fontSize: 14 }}>
+                <input type="checkbox" checked={colourByFieldView} onChange={event => setColourByFieldView(event.target.checked)} />
+                Colour model by FieldView status
+              </label>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12, marginTop: 17 }}>
+              {([
+                { label: "ITP Complete", count: inspectionCounts.Complete, colour: "#22C55E", detail: "No open NCR" },
+                { label: "ITP In Progress", count: inspectionCounts["In Progress"], colour: "#F59E0B", detail: "Inspection outstanding" },
+                { label: "Open NCR", count: inspectionCounts.NCR, colour: "#EF4444", detail: "Overrides ITP colour" },
+                { label: "Unlinked", count: inspectionCounts.Unlinked, colour: "#94A3B8", detail: "No mapped record" },
+              ] as const).map(item => (
+                <div key={item.label} style={{ border: "1px solid #cbd5e1", borderRadius: 10, padding: "13px 14px", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                    <span aria-hidden="true" style={{ display: "inline-block", width: 18, height: 18, flexShrink: 0, borderRadius: 5, background: item.colour, border: "1px solid #64748b55" }} />
+                    <strong style={{ fontSize: 14 }}>{item.label}</strong>
+                  </div>
+                  <div style={{ fontSize: 29, fontWeight: 750, marginTop: 8, lineHeight: 1.2 }}>{item.count}</div>
+                  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 5 }}>{item.detail} · pours</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 17, borderTop: "1px solid #cbd5e1", paddingTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 15 }}>FieldView export — ITP completion</strong>
+                <strong style={{ fontSize: 17 }}>{exportedItpPercent === null ? "Not available" : `${exportedItpPercent.toFixed(1)}%`}</strong>
+              </div>
+              <div role="progressbar" aria-label="Exported ITP completion, read-only" aria-valuemin={0} aria-valuemax={100} aria-valuenow={exportedItpPercent ?? 0}
+                style={{ height: 14, background: "#cbd5e1", borderRadius: 8, overflow: "hidden", marginTop: 9 }}>
+                <div style={{ width: `${exportedItpPercent ?? 0}%`, height: "100%", minWidth: exportedItpPercent && exportedItpPercent > 0 ? 3 : 0, background: "#22C55E", borderRadius: 8 }} />
+              </div>
+              <p style={{ fontSize: 13, margin: "8px 0 0", opacity: 0.85 }}>
+                <strong>{exportedItpComplete} of {itpForms.length}</strong> reinforced-concrete ITP forms in the CSV export are Complete, Complete - Archived or Closed.
+                {fieldViewLoading ? " Loading export…" : ""}
+              </p>
+              <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 15 }}>Model-linked pours — demonstration ITP completion</strong>
+                <strong style={{ fontSize: 17 }}>{itpCompletionPercent === null ? "Not available" : `${itpCompletionPercent}%`}</strong>
+              </div>
+              <div role="progressbar" aria-label="Model-linked ITP completion, read-only" aria-valuemin={0} aria-valuemax={100} aria-valuenow={itpCompletionPercent ?? 0}
+                style={{ height: 12, background: "#cbd5e1", borderRadius: 8, overflow: "hidden", marginTop: 9 }}>
+                <div style={{ width: `${itpCompletionPercent ?? 0}%`, height: "100%", background: "#22C55E", borderRadius: 8 }} />
+              </div>
+              <p style={{ fontSize: 13, margin: "8px 0 0", opacity: 0.85 }}>
+                <strong>{itpProgress.complete} of {itpProgress.total}</strong> model pours with linked ITP records have completed inspections. This uses illustrative BIM-to-form links and is independent of open NCRs.
+              </p>
+              {unresolvedItpLinks.length > 0 && <p style={{ color: "#b45309", fontSize: 12 }}>
+                Data check: {unresolvedItpLinks.length} demonstration form links have no matching FormID in the loaded export; these cannot count as completed.
+              </p>}
+              <p style={{ fontSize: 12, opacity: 0.75, margin: "9px 0 0" }}>Both bars are read-only indicators, not adjustable sliders. The model status colours continue to give open NCRs precedence.</p>
+            </div>
+            <p style={{ fontSize: 12, margin: "13px 0 0", opacity: 0.8 }}>
+              {pourIds.length} unique model pours · {colourEntries.length} colour-eligible BIM objects · {objectsWithoutPourId} BIM objects without a Full Pour ID.
+              {" "}Grey indicates unlinked pours in this legend; the viewer retains their original colour.
+              {" "}All BIM-to-FieldView links are illustrative and have not been verified.
             </p>
-            <small>{colourEntries.length} model objects have demonstration inspection links across {new Set(effectivePourLinks.map(link => link.fullPourId)).size} pours. Links are illustrative, not verified. Unmapped elements retain their original appearance.</small>
-            {pourLinkError && <p style={{ color: "#b91c1c" }}>Could not load mock links: {pourLinkError}</p>}
+            {pourLinkError && <p style={{ color: "#b91c1c" }}>Could not load demo links: {pourLinkError}</p>}
           </section>
           {/* MODEL MANAGEMENT */}
           <section className="panel models-panel" style={activeTab === "data" ? { display: "none" } : undefined}>
