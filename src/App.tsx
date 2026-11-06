@@ -18,6 +18,8 @@ function App() {
   const [aiQuery, setAiQuery] = useState("");
   const [aiSubmitted, setAiSubmitted] = useState("");
   const [tableSearch, setTableSearch] = useState("");
+  const [showSelectedModelOnly, setShowSelectedModelOnly] = useState(false);
+  const [showSelectedFormsOnly, setShowSelectedFormsOnly] = useState(false);
   const [ifcClassFilter, setIfcClassFilter] = useState("");
   const [propertyColumnFilter, setPropertyColumnFilter] = useState("");
   const [propertyValueFilter, setPropertyValueFilter] = useState("");
@@ -115,6 +117,7 @@ function App() {
         .sort((a, b) => a.localeCompare(b))
     : [];
   const filteredBIMObjects = allBIMObjects.filter(object => {
+    if (showSelectedModelOnly && !selectedBIMObjects.some(selected => selected.modelId === object.modelId && selected.runtimeId === object.runtimeId)) return false;
     if (ifcClassFilter && object.ifcClass !== ifcClassFilter) return false;
     if (propertyColumnFilter && propertyValueFilter &&
         getGroupedProperty(object, propertyColumnFilter) !== propertyValueFilter) return false;
@@ -255,6 +258,8 @@ function App() {
     return map;
   }, new Map<string, number>()).entries());
   const selectedPourIds = Array.from(new Set(selectedUnique.map(fullPourId).filter(Boolean)));
+  const selectedFormIds = new Set(effectivePourLinks.filter(link => selectedPourIds.includes(link.fullPourId)).map(link => link.formId));
+  const clearSelection = () => { setSelectedBIMObjects([]); setRealSelectedObject(null); setShowSelectedModelOnly(false); setShowSelectedFormsOnly(false); };
   const selectedInspectionCounts = selectedPourIds.reduce((counts, id) => {
     counts[getInspectionState(id)]++;
     return counts;
@@ -306,7 +311,19 @@ function App() {
       setActiveTab("dashboard");
     }
   };
+  const exportModelExcel = async () => {
+    const XLSX = await import("xlsx");
+    const headers = ["Runtime ID", "Object", "IFC Class", "Description", "Model ID", ...visiblePropertyColumns];
+    const rows = filteredBIMObjects.map(object => [object.runtimeId, object.name, object.ifcClass, object.description, object.modelId, ...visiblePropertyColumns.map(column => getGroupedProperty(object, column))]);
+    const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    sheet["!cols"] = headers.map((header, index) => ({ wch: Math.min(55, Math.max(14, header.length + 3, ...rows.slice(0, 100).map(row => String(row[index] ?? "").length + 2)) ) }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Model Data");
+    XLSX.writeFile(workbook, "Trimble_Model_Data.xlsx");
+  };
   const clearTableFilters = () => {
+    setShowSelectedModelOnly(false);
+    setShowFilteredIn3D(false);
     setTableSearch("");
     setIfcClassFilter("");
     setPropertyColumnFilter("");
@@ -335,6 +352,7 @@ function App() {
     return () => { active = false; };
   }, [activeTab, allBIMObjects.length, fieldViewData, fieldViewError]);
   const matchingForms = (fieldViewData?.forms ?? []).filter(form =>
+    (!showSelectedFormsOnly || selectedFormIds.has(form.FormID)) &&
     (!formStatus || form.Status === formStatus) &&
     (!formSearch.trim() || [form.FormID, form.FormName, form.FormTitle, form.Location, form.OwnedBy, form.FormType]
       .some(value => (value ?? "").toLowerCase().includes(formSearch.trim().toLowerCase())))
@@ -804,7 +822,7 @@ function App() {
               <p style={{ fontSize: 12, margin: "10px 0", color: "#64748b" }}>
                 FieldView forms come from the CSV export. BIM-to-form links are demonstration-only mappings, including automatically generated associations for pours without supplied links.
               </p>
-              {realSelectedObject && <button type="button" onClick={() => { setRealSelectedObject(null); setSelectedBIMObjects([]); }}>Clear selected element details</button>}
+              {selectedUnique.length > 0 && <button type="button" onClick={clearSelection}>Clear selection</button>}
               <div className="selected-object" style={{ marginTop: 14, padding: 12 }}>
                 <div className="section-title">Selected objects — combined quantities and inspections</div>
                 <div className="summary-grid">
@@ -951,6 +969,17 @@ function App() {
             </button>
           </div>
           <div className="model-data-content">
+            <div style={{ padding: 14, marginBottom: 12, border: "1px solid #cbd5e1", borderRadius: 8 }}>
+              <strong>Selected elements: {selectedUnique.length}</strong>
+              <span style={{ marginLeft: 16 }}>Unique pours: {selectedPourIds.length}</span>
+              <span style={{ marginLeft: 16 }}>Combined volume: {volumeValues.every(v => v === null) ? "Not available" : `${totalVolume.toFixed(3)} m³`}</span>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                <label><input type="checkbox" checked={showSelectedModelOnly} onChange={event => setShowSelectedModelOnly(event.target.checked)} /> Show selected only</label>
+                <button type="button" onClick={clearSelection} disabled={!selectedUnique.length}>Clear selection</button>
+                <button type="button" onClick={() => void exportModelExcel()} disabled={!filteredBIMObjects.length}>Export displayed rows to Excel (.xlsx)</button>
+              </div>
+              {selectedUnique.length > 0 && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Selected: {selectedUnique.map(object => object.name || `${object.modelId}:${object.runtimeId}`).join(" · ")}</p>}
+            </div>
             <div className="model-data-toolbar" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
               <input
                 className="model-search"
@@ -1052,8 +1081,9 @@ function App() {
                   {filteredBIMObjects.map(object => (
                     <tr
                       key={`${object.modelId}-${object.runtimeId}`}
-                      onClick={() => {
+                       onClick={() => {
                         setRealSelectedObject(object);
+                        setSelectedBIMObjects([object]);
                         
                         setSelectionCommand(previous => ({
                           modelId: object.modelId,
@@ -1181,6 +1211,15 @@ function App() {
           {fieldViewLoading && <p>Loading exported forms and answers…</p>}
           {fieldViewError && <div role="alert"><p>Could not load CSV data: {fieldViewError}</p>
             <button type="button" onClick={() => { setFieldViewError(""); setFieldViewData(null); }}>Retry</button></div>}
+          <div style={{ padding: 14, margin: "12px 0", border: "1px solid #cbd5e1", borderRadius: 8 }}>
+            <strong>Selected BIM elements: {selectedUnique.length}</strong> · {selectedPourIds.length} unique pours · {selectedFormIds.size} linked forms (demonstration mappings)
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+              <label><input type="checkbox" checked={showSelectedFormsOnly} onChange={event => { setShowSelectedFormsOnly(event.target.checked); setSelectedFormId(null); setFormPage(0); }} /> Show forms for selected elements only</label>
+              <button type="button" onClick={clearSelection} disabled={!selectedUnique.length}>Clear selection</button>
+              <button type="button" onClick={() => { setFormSearch(""); setFormStatus(""); setShowSelectedFormsOnly(false); setFormPage(0); }}>Clear filters</button>
+            </div>
+            {selectedUnique.length > 0 && <p style={{ margin: "8px 0 0", fontSize: 12 }}>Pours: {selectedPourIds.join(" · ") || "No Full Pour IDs"}</p>}
+          </div>
           {fieldViewData && <>
             <p style={{ margin: "12px 0" }}>{fieldViewData.forms.length.toLocaleString()} forms loaded · {fieldViewData.answersByForm.size.toLocaleString()} forms with answers · {fieldViewData.tablesByForm.size.toLocaleString()} forms with checklist tables</p>
             {!selectedForm ? <>
@@ -1192,6 +1231,7 @@ function App() {
                   <option value="">All statuses</option>
                   {[...new Set(fieldViewData.forms.map(form => form.Status).filter(Boolean))].sort().map(status => <option key={status} value={status}>{status}</option>)}
                 </select>
+                <button type="button" onClick={() => { setFormSearch(""); setFormStatus(""); setShowSelectedFormsOnly(false); setFormPage(0); }}>Clear filters</button>
                 <span style={{ alignSelf: "center" }}>{matchingForms.length.toLocaleString()} matches</span>
               </div>
               <div style={{ overflowX: "auto" }}><table className="model-data-table" style={{ width: "100%" }}>

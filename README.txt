@@ -1,14 +1,6 @@
-FIELDVIEW INSPECTION LEGEND UPDATE
-
-Contains only src/App.tsx. Based on the confirmed working multi-selection fix.
-
-Install from your project root:
-  unzip -o FieldView_Inspection_Legend_Update.zip -d .
+Install from project root:
+  npm install xlsx
+  unzip -o Model_Data_FieldView_Selection_Excel_Update.zip -d .
   npm run build
 
-Changes only the inspection status panel below the viewer and adds summary calculations.
-Counts are distinct model Full Pour IDs, not number of BIM objects.
-ITP completion is calculated independently of open NCR precedence.
-Demo associations remain clearly labelled.
-
-No changes to TrimbleViewer.tsx, fieldviewService.ts, CSVs, or dependencies.
+Replaces src/App.tsx only. xlsx package is required for Excel export. Commit package.json and package-lock.json after npm install.
