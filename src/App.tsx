@@ -17,6 +17,66 @@ function App() {
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [aiQuery, setAiQuery] = useState("");
   const [aiSubmitted, setAiSubmitted] = useState("");
+  const [tcDocuments, setTcDocuments] = useState<{id: string; name: string; revision: string | number | null}[]>([]);
+  const [tcDocError, setTcDocError] = useState("");
+  const [tcDocBusy, setTcDocBusy] = useState("");
+  const [tcDocMessage, setTcDocMessage] = useState("");
+  const [tcDocResults, setTcDocResults] = useState<{id: string; name: string; revision: string | number | null; page: number; excerpt: string}[]>([]);
+  const [tcDocIndexed, setTcDocIndexed] = useState(0);
+  const [tcDocSearchBusy, setTcDocSearchBusy] = useState(false);
+  const [tcDocSearched, setTcDocSearched] = useState(false);
+  const [tcDocLastQuery, setTcDocLastQuery] = useState("");
+  const refreshTcDocuments = async () => {
+    setTcDocError("");
+    try {
+      const response = await fetch("/api/documents", {cache: "no-store"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setTcDocuments(data.documents || []);
+      setTcDocMessage(`${(data.documents || []).length} PDF(s) found in the configured Trimble Connect folder.`);
+    } catch (error) { setTcDocError(String(error)); }
+  };
+  const indexTcDocument = async (id: string) => {
+    setTcDocBusy(id); setTcDocError("");
+    try {
+      const response = await fetch(`/api/documents/${encodeURIComponent(id)}/index`, {method: "POST"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setTcDocMessage(`Indexed ${data.document.pageCount} page(s) from ${data.document.name}; ${data.document.pages.filter((p: {searchable: boolean}) => !p.searchable).length} page(s) contain no extractable text.`);
+      setTcDocIndexed(value => value + 1);
+    } catch (error) { setTcDocError(String(error)); }
+    finally { setTcDocBusy(""); }
+  };
+  const searchTcDocuments = async (query: string) => {
+    const term = query.trim();
+    setTcDocError("");
+    setTcDocLastQuery(term);
+    setTcDocSearched(Boolean(term));
+    setTcDocResults([]);
+    if (!term) return;
+    setTcDocSearchBusy(true);
+    try {
+      const response = await fetch(`/api/documents/search?q=${encodeURIComponent(term)}`, {cache: "no-store"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setTcDocResults(Array.isArray(data.results) ? data.results : []);
+      setTcDocIndexed(Number(data.indexed) || 0);
+    } catch (error) { setTcDocError(error instanceof Error ? error.message : String(error)); }
+    finally { setTcDocSearchBusy(false); }
+  };
+  const runProjectSearch = (query: string) => {
+    setAiSubmitted(query);
+    void searchTcDocuments(query);
+  };
+  const clearProjectSearch = () => {
+    setAiQuery("");
+    setAiSubmitted("");
+    setTcDocResults([]);
+    setTcDocSearched(false);
+    setTcDocLastQuery("");
+    setTcDocError("");
+  };
+
   const [tableSearch, setTableSearch] = useState("");
   const [showSelectedModelOnly, setShowSelectedModelOnly] = useState(false);
   const [showSelectedFormsOnly, setShowSelectedFormsOnly] = useState(false);
@@ -1148,16 +1208,16 @@ function App() {
       )}
       {activeTab === "ai" && (
         <section className="panel" style={{ margin: 16, padding: 20, minWidth: 0 }}>
-          <div className="panel-header"><div><h2>BIM + FieldView Search</h2>
-            <span>Local natural-language search demonstrator · no external AI model or API calls</span></div></div>
-          <p>Ask about a Full Pour ID, inspection status, or IFC class. Results come from loaded BIM objects, exported FieldView forms and the demonstration mapping CSV.</p>
-          <form onSubmit={event => { event.preventDefault(); setAiSubmitted(aiQuery); }}
+          <div className="panel-header"><div><h2>Project Information Search</h2>
+            <span>BIM + FieldView + indexed Trimble Connect PDFs · keyword and demonstration search, not generative AI</span></div></div>
+          <p>Use the search box below to search BIM/FieldView demonstration records and indexed PDF text together. For drawings and general notes, try a distinctive word or exact phrase (for example, concrete or padstone). PDFs must be indexed first.</p>
+          <form onSubmit={event => { event.preventDefault(); runProjectSearch(aiQuery); }}
             style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
             <input className="model-search" style={{ flex: "1 1 320px" }} value={aiQuery}
               onChange={event => setAiQuery(event.target.value)}
-              placeholder="e.g. What is the status of pour 9HG-47/4?" aria-label="Search BIM and FieldView" />
-            <button type="submit" className="trimble-connect-button">Search</button>
-            <button type="button" onClick={() => { setAiQuery(""); setAiSubmitted(""); }}>Clear</button>
+              placeholder="e.g. concrete, padstone, or 9HG-47/4" aria-label="Search project information" />
+            <button type="submit" className="trimble-connect-button" disabled={tcDocSearchBusy}>{tcDocSearchBusy ? "Searching…" : "Search all sources"}</button>
+            <button type="button" onClick={clearProjectSearch}>Clear search</button>
           </form>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
             {[
@@ -1165,7 +1225,30 @@ function App() {
               "Show completed pours",
               "Show pours with NCR",
               "Show outstanding inspections",
-            ].map(example => <button key={example} type="button" onClick={() => { setAiQuery(example); setAiSubmitted(example); }}>{example}</button>)}
+            ].map(example => <button key={example} type="button" onClick={() => { setAiQuery(example); runProjectSearch(example); }}>{example}</button>)}
+          </div>
+          <div style={{ border: "1px solid #d6dbe0", borderRadius: 8, padding: 16, marginBottom: 18 }}>
+            <h3 style={{marginTop: 0}}>Trimble Connect PDF drawing and notes index (read-only)</h3>
+            <p>List PDFs from the configured Trimble folder, index each PDF by page, and search extracted text. Index is held in backend memory until server restart. Drawings without searchable text may require OCR later. No BIM-to-drawing links are assumed.</p>
+            <div style={{display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10}}>
+              <button type="button" onClick={() => void refreshTcDocuments()}>Find PDFs in Trimble Connect</button>
+            </div>
+            {tcDocMessage && <p role="status">{tcDocMessage}</p>}
+            {tcDocError && <p role="alert" style={{color: "#b42318"}}>{tcDocError}</p>}
+            {tcDocuments.map(doc => <div key={doc.id} style={{display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, padding: "8px 0", borderTop: "1px solid #eee"}}>
+              <span><strong>{doc.name}</strong>{doc.revision != null ? ` · revision ${doc.revision}` : ""}</span>
+              <button type="button" disabled={Boolean(tcDocBusy)} onClick={() => void indexTcDocument(doc.id)}>{tcDocBusy === doc.id ? "Indexing…" : "Index PDF"}</button>
+            </div>)}
+            {tcDocIndexed > 0 && <p>{tcDocIndexed} document(s) indexed in the current backend session.</p>}
+            {tcDocSearched && !tcDocSearchBusy && !tcDocError && <p role="status" style={{fontWeight: 600}}>
+              PDF results for “{tcDocLastQuery}”: {tcDocResults.length} matching page(s) across {tcDocIndexed} indexed document(s).
+              {tcDocIndexed === 0 ? " Index a PDF above before searching its contents." : tcDocResults.length === 0 ? " Try a shorter keyword or a phrase copied from the PDF." : ""}
+            </p>}
+            {tcDocResults.length > 0 && <div><h4>Trimble Connect PDF results</h4>{tcDocResults.map((result, index) => <div key={`${result.id}-${result.page}-${index}`} style={{borderTop: "1px solid #eee", padding: "10px 0"}}>
+              <strong>{result.name}</strong> · page {result.page}{result.revision != null ? ` · revision ${result.revision}` : ""}
+              <p style={{margin: "5px 0"}}>{result.excerpt}</p>
+              <small>Extracted text · source: Trimble Connect · page reference only (direct file link pending API verification)</small>
+            </div>)}</div>}
           </div>
           {fieldViewLoading && <p>Loading FieldView exports…</p>}
           {fieldViewError && <p role="alert">FieldView data unavailable: {fieldViewError}</p>}

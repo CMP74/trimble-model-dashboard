@@ -500,6 +500,174 @@ app.get("/api/asite/connection", (_req, res) => {
   });
 });
 
+
+// -------------------------------------------------------------------
+// Trimble Connect PDF indexing (read-only, per server session)
+// Folder defaults to the model folder; change TRIMBLE_DOCUMENT_FOLDER_ID
+// in the backend environment to point at the folder containing the PDF.
+// -------------------------------------------------------------------
+const documentIndex = new Map();
+const TC_API = "https://app22.connect.trimble.com/tc/api/2.0";
+const DOCUMENT_FOLDER_NAME = process.env.TRIMBLE_DOCUMENT_FOLDER_NAME || "XX Sandbox";
+const DOCUMENT_FOLDER_OVERRIDE = process.env.TRIMBLE_DOCUMENT_FOLDER_ID || "";
+const DOCUMENT_PROJECT_ID = process.env.TRIMBLE_PROJECT_ID || "7nAFSwau0CI";
+let folderCache = null;
+const MAX_PDF_BYTES = 30 * 1024 * 1024;
+function tokenIsValid() {
+  return Boolean(trimbleAuth.accessToken) && (!trimbleAuth.expiresAt || Date.now() < trimbleAuth.expiresAt);
+}
+function tcHeaders() {
+  return { Authorization: `Bearer ${trimbleAuth.accessToken}`, Accept: "application/json" };
+}
+function extractItems(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["items", "files", "results", "data"]) if (Array.isArray(payload?.[key])) return payload[key];
+  return [];
+}
+function folderIdFromProject(project) {
+  return project?.rootId ?? project?.rootFolderId ?? project?.rootFolder?.id ?? project?.root?.id ?? null;
+}
+async function resolveDocumentFolder({ refresh = false } = {}) {
+  if (DOCUMENT_FOLDER_OVERRIDE) return { id: DOCUMENT_FOLDER_OVERRIDE, name: DOCUMENT_FOLDER_NAME, mode: "explicit-id" };
+  if (!refresh && folderCache) return folderCache;
+  const project = await tcJson(`${TC_API}/projects/${encodeURIComponent(DOCUMENT_PROJECT_ID)}`);
+  const rootId = folderIdFromProject(project);
+  if (!rootId) throw new Error("Project metadata did not contain a root folder ID. Check the Trimble project API response.");
+  const entries = extractItems(await tcJson(`${TC_API}/folders/${encodeURIComponent(rootId)}/items`));
+  const folder = entries.find(item => String(item.name ?? "").trim().toLowerCase() === DOCUMENT_FOLDER_NAME.trim().toLowerCase() &&
+    (String(item.type ?? item.itemType ?? item.objectType ?? "").toLowerCase().includes("folder") || !/\.[^./]+$/.test(String(item.name ?? ""))));
+  if (!folder?.id) {
+    const available = entries.filter(item => String(item.type ?? item.itemType ?? item.objectType ?? "").toLowerCase().includes("folder") || !/\.[^./]+$/.test(String(item.name ?? ""))).map(item => item.name).filter(Boolean).slice(0, 20);
+    throw new Error(`Folder "${DOCUMENT_FOLDER_NAME}" was not found at the project root. Visible folders: ${available.join(", ") || "none"}.`);
+  }
+  folderCache = { id: String(folder.id), name: String(folder.name), mode: "project-root-discovery" };
+  return folderCache;
+}
+function docRecord(item) {
+  return {
+    id: String(item.id ?? item.fileId ?? ""),
+    name: String(item.name ?? item.fileName ?? ""),
+    revision: item.revision ?? item.version ?? item.versionNumber ?? null,
+    modified: item.modified ?? item.modifiedAt ?? item.updatedAt ?? null,
+    source: "Trimble Connect",
+  };
+}
+function isPdf(item) {
+  return /\.pdf$/i.test(String(item.name ?? item.fileName ?? "")) || /application\/pdf/i.test(String(item.mimeType ?? item.contentType ?? ""));
+}
+async function tcJson(url) {
+  const response = await fetch(url, { headers: tcHeaders(), signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`Trimble Connect returned HTTP ${response.status}`);
+  return response.json();
+}
+app.get("/api/documents/status", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!tokenIsValid()) return res.json({ authenticated: false, folderName: DOCUMENT_FOLDER_NAME, indexed: documentIndex.size });
+  try {
+    const folder = await resolveDocumentFolder();
+    res.json({ authenticated: true, folderName: folder.name, folderId: folder.id, resolution: folder.mode, indexed: documentIndex.size });
+  } catch (error) {
+    res.json({ authenticated: true, folderName: DOCUMENT_FOLDER_NAME, folderId: null, indexed: documentIndex.size, error: error.message });
+  }
+});
+app.get("/api/documents", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!tokenIsValid()) return res.status(401).json({ error: "Connect to Trimble first (or renew your session)." });
+  try {
+    const folder = await resolveDocumentFolder({ refresh: req.query.refresh === "1" });
+    const data = await tcJson(`${TC_API}/folders/${encodeURIComponent(folder.id)}/items`);
+    const documents = extractItems(data).filter(isPdf).map(docRecord).filter(x => x.id);
+    res.json({ source: "trimble-connect", folderId: folder.id, folderName: folder.name, documents });
+  } catch (error) {
+    res.status(502).json({ error: `Could not list PDF files: ${error.message}` });
+  }
+});
+// Only file IDs from the configured folder can be indexed. No arbitrary URLs.
+app.post("/api/documents/:id/index", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!tokenIsValid()) return res.status(401).json({ error: "Connect to Trimble first (or renew your session)." });
+  try {
+    const folder = await resolveDocumentFolder();
+    const items = extractItems(await tcJson(`${TC_API}/folders/${encodeURIComponent(folder.id)}/items`));
+    const item = items.find(x => String(x.id ?? x.fileId) === req.params.id && isPdf(x));
+    if (!item) return res.status(404).json({ error: "PDF not found in the selected Trimble Connect document folder." });
+    const meta = docRecord(item);
+    // Trimble Connect legacy Core API provides a short-lived, preauthorised
+    // download URL via /files/fs/{fileId}/downloadurl. The former
+    // /files/{fileId}/download route is not supported here (HTTP 404).
+    const downloadEndpoint = `${TC_API}/files/fs/${encodeURIComponent(meta.id)}/downloadurl`;
+    const downloadInfoResponse = await fetch(downloadEndpoint, {
+      headers: tcHeaders(),
+      redirect: "manual",
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!downloadInfoResponse.ok) {
+      throw new Error(`Trimble download-link request returned HTTP ${downloadInfoResponse.status}. Confirm this file ID and download permissions.`);
+    }
+    const downloadInfoText = await downloadInfoResponse.text();
+    let downloadInfo;
+    try { downloadInfo = JSON.parse(downloadInfoText); }
+    catch { downloadInfo = downloadInfoText.trim(); }
+    // Trimble API versions can return either a URL string or a JSON object.
+    const downloadLink = typeof downloadInfo === "string" ? downloadInfo :
+      (downloadInfo?.url ?? downloadInfo?.downloadUrl ?? downloadInfo?.downloadURL ??
+       downloadInfo?.href ?? downloadInfo?.link ?? downloadInfo?.data?.url ??
+       downloadInfo?.data?.downloadUrl ?? downloadInfo?.result?.url);
+    if (typeof downloadLink !== "string" || !downloadLink.trim()) {
+      const keys = downloadInfo && typeof downloadInfo === "object" ? Object.keys(downloadInfo).join(", ") : "none";
+      throw new Error(`Trimble returned a download-link response without a recognised URL (fields: ${keys}).`);
+    }
+    const signedUrl = new URL(downloadLink);
+    if (signedUrl.protocol !== "https:") throw new Error("Trimble returned a non-HTTPS download URL.");
+    // Download URLs are short-lived and preauthorised. Never send the Trimble
+    // OAuth bearer token to a signed storage URL.
+    const pdfResponse = await fetch(signedUrl, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!pdfResponse.ok) throw new Error(`PDF download returned HTTP ${pdfResponse.status}. Check the Trimble file download API/permissions.`);
+    const size = Number(pdfResponse.headers.get("content-length") || 0);
+    if (size > MAX_PDF_BYTES) throw new Error("PDF exceeds the 30 MB indexing limit.");
+    const bytes = new Uint8Array(await pdfResponse.arrayBuffer());
+    if (bytes.byteLength > MAX_PDF_BYTES) throw new Error("PDF exceeds the 30 MB indexing limit.");
+    if (String.fromCharCode(...bytes.slice(0,5)) !== "%PDF-") throw new Error("Trimble returned a non-PDF response. File download endpoint may need adjustment.");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdf = await pdfjs.getDocument({ data: bytes, useSystemFonts: true, disableFontFace: true }).promise;
+    const pages = [];
+    for (let number = 1; number <= pdf.numPages; number++) {
+      const page = await pdf.getPage(number);
+      const content = await page.getTextContent();
+      const text = content.items.map(x => typeof x.str === "string" ? x.str : "").join(" ").replace(/\s+/g, " ").trim();
+      pages.push({ page: number, text, searchable: Boolean(text), characters: text.length });
+      page.cleanup();
+    }
+    const result = { ...meta, indexedAt: new Date().toISOString(), pageCount: pages.length, pages };
+    documentIndex.set(meta.id, result);
+    res.json({ document: result });
+  } catch (error) {
+    console.error("PDF indexing failed:", error);
+    res.status(502).json({ error: `Could not index PDF: ${error.message}` });
+  }
+});
+app.get("/api/documents/search", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!tokenIsValid()) return res.status(401).json({ error: "Connect to Trimble first." });
+  const query = String(req.query.q || "").trim().toLowerCase().slice(0, 150);
+  if (!query) return res.json({ results: [], indexed: documentIndex.size });
+  const terms = query.split(/\s+/).filter(x => x.length > 2);
+  const results = [];
+  for (const document of documentIndex.values()) {
+    for (const page of document.pages) {
+      const lower = page.text.toLowerCase();
+      if (!terms.length || !terms.every(term => lower.includes(term))) continue;
+      const first = lower.indexOf(terms[0]);
+      const start = Math.max(0, first - 120);
+      results.push({ id: document.id, name: document.name, revision: document.revision, page: page.page, excerpt: page.text.slice(start, start + 440), source: "Trimble Connect PDF", matchedBy: "text" });
+    }
+  }
+  res.json({ results: results.slice(0, 50), indexed: documentIndex.size });
+});
+
 // ---------------------------------------------------------
 // Start server
 // ---------------------------------------------------------
