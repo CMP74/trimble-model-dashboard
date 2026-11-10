@@ -23,6 +23,23 @@ function App() {
   const [tcDocMessage, setTcDocMessage] = useState("");
   const [tcDocResults, setTcDocResults] = useState<{id: string; name: string; revision: string | number | null; page: number; excerpt: string}[]>([]);
   const [tcDocIndexed, setTcDocIndexed] = useState(0);
+  const [dashboardDocsLoading, setDashboardDocsLoading] = useState(false);
+  const [dashboardDocsError, setDashboardDocsError] = useState("");
+  const loadDashboardDocuments = async () => {
+    setDashboardDocsLoading(true);
+    setDashboardDocsError("");
+    try {
+      const response = await fetch("/api/documents", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setTcDocuments(Array.isArray(data.documents) ? data.documents : []);
+    } catch (error) {
+      setDashboardDocsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDashboardDocsLoading(false);
+    }
+  };
+
   const [tcDocSearchBusy, setTcDocSearchBusy] = useState(false);
   const [tcDocSearched, setTcDocSearched] = useState(false);
   const [tcDocLastQuery, setTcDocLastQuery] = useState("");
@@ -89,6 +106,11 @@ function App() {
 
   const [authStatus, setAuthStatus] =
     useState("Not connected");
+  useEffect(() => {
+    if (activeTab === "dashboard" && authStatus === "Connected") {
+      void loadDashboardDocuments();
+    }
+  }, [activeTab, authStatus]);
   // -------------------------------------------------------
   // FieldView
   // -------------------------------------------------------
@@ -853,6 +875,31 @@ function App() {
                       </label>
                     )
                   )}
+              </div>
+              {/* Documents are listed from Trimble Connect, not stored in this dashboard. */}
+              <div className="section-title" style={{marginTop: 20, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8}}>
+                <span>Trimble Connect PDFs — XX Sandbox</span>
+                <button type="button" onClick={() => void loadDashboardDocuments()} disabled={dashboardDocsLoading} style={{fontSize: 12}}>
+                  {dashboardDocsLoading ? "Loading…" : "Refresh"}
+                </button>
+              </div>
+              {dashboardDocsError && <p role="alert" style={{color: "#b42318", fontSize: 12}}>{dashboardDocsError}</p>}
+              {!dashboardDocsLoading && !dashboardDocsError && tcDocuments.length === 0 && (
+                <p style={{fontSize: 12, color: "#64748b"}}>No PDFs listed. Connect to Trimble, then click Refresh.</p>
+              )}
+              <div className="model-list" aria-label="Trimble Connect PDF documents">
+                {tcDocuments.map(doc => (
+                  <div className="model-row" key={doc.id} style={{display: "flex", alignItems: "center", gap: 10}}>
+                    <span aria-hidden="true">📄</span>
+                    <div className="model-details" style={{minWidth: 0, flex: 1}}>
+                      <strong style={{overflowWrap: "anywhere"}}>{doc.name}</strong>
+                      <span>PDF{doc.revision != null ? ` · Revision ${doc.revision}` : ""}</span>
+                    </div>
+                    <button type="button" onClick={() => setActiveTab("ai")} style={{fontSize: 12}} aria-label={`Search or index ${doc.name} in AI Search`}>
+                      AI Search
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           </section>
