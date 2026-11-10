@@ -629,3 +629,79 @@ select {
 .bim-column-name { display: block; font-size: 12px; font-weight: 700; line-height: 1.35; color: #253747; }
 .bim-column-group { display: block; margin-top: 5px; font-size: 10px; font-weight: 500; line-height: 1.3; color: #687d8d; }
 
+/* Professional interface v3 — uses verified selectors from the supplied App.tsx. */
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #203647; background: #f2f5f8; }
+body { background: #f2f5f8; color: #203647; }
+.app { min-height: 100vh; }
+.app-header { background: #102b40; border-bottom: 3px solid #1bb1b0; color: #fff; min-height: 86px; padding: 17px clamp(18px,2.5vw,36px); box-shadow: 0 5px 20px #122c4019; }
+.app-header h1 { color: #fff; font-size: clamp(20px,2vw,27px); letter-spacing: -.035em; font-weight: 760; }
+.app-header p { color: #b9cfdb; font-size: 12px; }
+.app-header .status { color: #dcebf2; background: #ffffff12; padding: 8px 11px; border: 1px solid #ffffff30; border-radius: 999px; }
+.app-header .trimble-connect-button { background: #1a979e; }
+.dashboard-tabs { background: #eaf0f4; border-bottom: 1px solid #d4e0e6; padding: 12px clamp(16px,2vw,30px) 0; gap: 5px; overflow-x: auto; scrollbar-width: thin; }
+.dashboard-tab { background: transparent; border: 1px solid transparent; border-bottom: 3px solid transparent; color: #4e6373; border-radius: 8px 8px 0 0; padding: 12px clamp(12px,1.5vw,19px); font-size: 13px; font-weight: 700; white-space: nowrap; transition: color .12s,background .12s; }
+.dashboard-tab:hover { background: #dae9ed; color: #124c5a; }
+.dashboard-tab.active { background: #fff; color: #077f85; border-color: #d4e0e6; border-bottom-color: #078990; box-shadow: inset 0 3px #07959b; }
+.workspace { grid-template-columns: minmax(0, 1.85fr) minmax(340px, 1fr); padding: clamp(14px,2vw,27px); gap: 18px; align-items: start; }
+.workspace-left,.workspace-right { gap: 18px; }
+.workspace-left { grid-template-rows: minmax(440px, 64vh) auto auto; }
+.workspace-right { grid-template-rows: auto auto; }
+.panel { border: 1px solid #dbe5eb; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px #122d4010; }
+.panel-header { min-height: 67px; background: #fbfdfe; border-bottom-color: #e3ebf0; padding: 15px 18px; gap: 12px; }
+.panel-header h2 { color: #143247; font-size: 15px; letter-spacing: -.015em; font-weight: 750; }
+.panel-header span { color: #718594; font-size: 11px; }
+.panel-badge { background: #e5f5f3; color: #067781; border: 1px solid #cde7e3; border-radius: 999px; }
+.trimble-connect-button { background: #087e87; color: #fff; border: 1px solid #087e87; border-radius: 7px; padding: 10px 16px; font-weight: 700; }
+.trimble-connect-button:hover { background: #05666c; opacity: 1; }
+/* All other controls use a restrained, consistent secondary treatment. */
+.app button:not(.dashboard-tab):not(.trimble-connect-button):not(.field-record) { background: #fff; color: #214b5d; border: 1px solid #bfced8; border-radius: 7px; padding: 8px 11px; font-size: 12px; font-weight: 650; cursor: pointer; transition: background .12s,border-color .12s; }
+.app button:not(.dashboard-tab):not(.trimble-connect-button):not(.field-record):hover:not(:disabled) { background: #eef7f7; border-color: #76bdc0; }
+.app button:disabled { opacity: .55; cursor: not-allowed; }
+.app button:focus-visible,.app input:focus-visible,.app select:focus-visible { outline: 2px solid #16a5ad; outline-offset: 2px; }
+.models-content,.information-content,.model-data-content { padding: 18px; }
+.model-search,.discipline-filter,.app input[type="text"],.app input[type="search"],.app select { border: 1px solid #c8d7e0; border-radius: 7px; min-height: 38px; background: #fff; color: #253d4e; }
+.model-list,.bim-property-group { border-radius: 8px; border-color: #dbe5eb; }
+.model-row { min-height: 50px; border-bottom-color: #ebf0f4; }
+.model-row:hover { background: #f2f8f9; }
+.model-details strong { color: #22394a; }
+.model-details span { color: #718495; }
+.section-title { color: #213e50; font-size: 12px; font-weight: 760; }
+.loaded-badge { border-radius: 999px; background: #e7f4eb; color: #26754f; }
+.summary-grid,.field-summary { gap: 11px; }
+.summary-card,.field-summary div { background: #f6f9fb; border: 1px solid #e2ebf0; border-radius: 9px; }
+.summary-card strong { color: #123449; font-weight: 780; }
+.empty-selection { border-radius: 8px; background: #f8fbfc; }
+.field-record { border-radius: 8px; border-color: #dce5e9; }
+.field-record:hover { background: #f2f8f9; border-color: #9eced0; }
+.model-data-scroll { border: 1px solid #dce5eb; border-radius: 9px; }
+.model-data-table th { background: #e9f1f5; color: #1e4053; border-color: #d7e2e9; }
+.model-data-table td { border-color: #e2eaf0; }
+.model-data-table tbody tr:nth-child(even) { background: #fbfcfd; }
+.model-data-table tbody tr:hover { background: #eefaF8; }
+.mock-badge { border-radius: 999px; }
+.panel-header-controls,.viewer-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.app .panel-action { white-space: nowrap; }
+/* Dashboard-only collapsible panels: the content stays mounted (selection / data unchanged). */
+.workspace:not(.model-data-mode) .models-panel.panel-collapsed .models-content,
+.workspace:not(.model-data-mode) .information-panel.panel-collapsed .information-content,
+.workspace:not(.model-data-mode) .field-panel.panel-collapsed .field-summary,
+.workspace:not(.model-data-mode) .field-panel.panel-collapsed .field-records,
+.workspace:not(.model-data-mode) .inspection-panel.panel-collapsed .inspection-body { display: none; }
+.inspection-heading { min-height: 67px; padding: 15px 18px; border-bottom: 1px solid #e3ebf0; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #fbfdfe; }
+.inspection-heading h2 { font-size: 15px; font-weight: 750; color: #143247; margin: 0; }
+.inspection-heading span { display: block; font-size: 11px; color: #718594; margin-top: 3px; }
+.inspection-body { padding: 18px; }
+.inspection-body > div:first-child > div:first-child > h3 { display: none; }
+.inspection-body > div:first-child > div:first-child > p { display: none; }
+.viewer-panel { min-height: 0; }
+.viewer-container { background: #e8f0f3; }
+/* Expand viewer without unmounting iframe, eliminating loss of BIM state. */
+.workspace.viewer-expanded { grid-template-columns: minmax(0,1fr); }
+.workspace.viewer-expanded > .workspace-right { display: none; }
+.workspace.viewer-expanded > .workspace-left { grid-template-rows: minmax(560px,calc(100vh - 230px)); }
+.workspace.viewer-expanded > .workspace-left > .inspection-panel,
+.workspace.viewer-expanded > .workspace-left > .models-panel { display: none; }
+.workspace.viewer-expanded .viewer-panel { min-height: 560px; }
+.workspace.viewer-expanded .trimble-viewer { min-height: 530px; }
+@media (max-width: 1040px) { .workspace { grid-template-columns: minmax(0,1fr); } .workspace-left { grid-template-rows: minmax(430px, 58vh) auto auto; } }
+@media (max-width: 660px) { .app-header { padding: 16px; } .workspace { padding: 12px; gap: 12px; } .workspace-left,.workspace-right { gap: 12px; } .panel-header,.inspection-heading { padding: 12px 14px; } .models-content,.information-content,.model-data-content,.inspection-body { padding: 13px; } .dashboard-tab { padding: 10px 12px; } .viewer-header-actions { justify-content: flex-end; } }

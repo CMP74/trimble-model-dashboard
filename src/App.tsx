@@ -15,6 +15,12 @@ function App() {
   // Layout only: keep the Trimble viewer mounted across tab changes.
   const [activeTab, setActiveTab] = useState<"dashboard" | "data" | "fieldview" | "ai" | "asite">("dashboard");
   const [showDataViewer, setShowDataViewer] = useState(false);
+  // Presentation-only controls. Preserve the mounted Trimble viewer and existing selection state.
+  const [viewerExpanded, setViewerExpanded] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState({ models: false, inspections: false, information: false, field: false });
+  const togglePanel = (panel: keyof typeof panelCollapsed) => {
+    setPanelCollapsed(current => ({ ...current, [panel]: !current[panel] }));
+  };
   const [aiQuery, setAiQuery] = useState("");
   const [aiSubmitted, setAiSubmitted] = useState("");
   const [tcDocuments, setTcDocuments] = useState<{id: string; name: string; revision: string | number | null}[]>([]);
@@ -685,7 +691,7 @@ function App() {
       </nav>
 
       {/* WORKSPACE */}
-      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""}`} style={(activeTab === "fieldview" || activeTab === "ai" || activeTab === "asite") ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
+      <main className={`workspace ${activeTab === "data" ? "model-data-mode" : ""} ${showDataViewer ? "data-viewer-visible" : ""} ${activeTab === "dashboard" && viewerExpanded ? "viewer-expanded" : ""}`} style={(activeTab === "fieldview" || activeTab === "ai" || activeTab === "asite") ? { display: "none" } : activeTab === "data" ? { display: "flex", flexDirection: "column", width: "100%" } : undefined}>
         {/* LEFT COLUMN */}
         <div className="workspace-left" style={activeTab === "data" ? { display: showDataViewer ? "block" : "none", width: "100%" } : undefined}>
           {/* TRIMBLE VIEWER */}
@@ -697,8 +703,11 @@ function App() {
                   Trimble Connect
                 </span>
               </div>
-              <div className="panel-badge">
-                Structural
+              <div className="viewer-header-actions">
+                <span className="panel-badge">Structural</span>
+                {activeTab === "dashboard" && <button type="button" className="panel-action viewer-expand-action" onClick={() => setViewerExpanded(value => !value)} aria-pressed={viewerExpanded} title={viewerExpanded ? "Restore dashboard panels" : "Expand 3D viewer"}>
+                  {viewerExpanded ? "↙ Restore layout" : "⛶ Expand viewer"}
+                </button>}
               </div>
             </div>
             <div className="viewer-container">
@@ -717,7 +726,12 @@ function App() {
               />
             </div>
           </section>
-          <section className="panel" style={{ padding: 20, marginTop: 12 }} aria-label="FieldView pour inspection status">
+          <section className={`panel inspection-panel ${panelCollapsed.inspections ? "panel-collapsed" : ""}`} style={{ marginTop: 12 }} aria-label="FieldView pour inspection status">
+            <div className="inspection-heading">
+              <div><h2>FieldView Pour Inspection Status</h2><span>Inspection performance · model-linked associations are illustrative</span></div>
+              <button type="button" className="panel-action" aria-expanded={!panelCollapsed.inspections} onClick={() => togglePanel("inspections")}>{panelCollapsed.inspections ? "+ Expand" : "− Minimise"}</button>
+            </div>
+            <div className="inspection-body">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <h3 style={{ margin: "0 0 5px", fontSize: 19 }}>FieldView Pour Inspection Status</h3>
@@ -780,16 +794,18 @@ function App() {
               {" "}All BIM-to-FieldView links are illustrative and have not been verified.
             </p>
             {pourLinkError && <p style={{ color: "#b91c1c" }}>Could not load demo links: {pourLinkError}</p>}
+            </div>
           </section>
           {/* MODEL MANAGEMENT */}
-          <section className="panel models-panel" style={activeTab === "data" ? { display: "none" } : undefined}>
+          <section className={`panel models-panel ${panelCollapsed.models ? "panel-collapsed" : ""}`} style={activeTab === "data" ? { display: "none" } : undefined}>
             <div className="panel-header">
               <div>
                 <h2>Models</h2>
                 <span>
-                  Project model selection
+                  Project model selection and document register
                 </span>
               </div>
+              <button type="button" className="panel-action" aria-expanded={!panelCollapsed.models} onClick={() => togglePanel("models")}>{panelCollapsed.models ? "+ Expand" : "− Minimise"}</button>
             </div>
             <div className="models-content">
               {/* SEARCH */}
@@ -907,7 +923,7 @@ function App() {
         {/* RIGHT COLUMN */}
         <div className="workspace-right" style={activeTab === "data" ? { display: "none" } : undefined}>
           {/* MODEL INFORMATION */}
-          <section className="panel information-panel">
+          <section className={`panel information-panel ${panelCollapsed.information ? "panel-collapsed" : ""}`}>
             <div className="panel-header">
               <div>
                 <h2>
@@ -917,6 +933,7 @@ function App() {
                   BIM object information
                 </span>
               </div>
+              <button type="button" className="panel-action" aria-expanded={!panelCollapsed.information} onClick={() => togglePanel("information")}>{panelCollapsed.information ? "+ Expand" : "− Minimise"}</button>
             </div>
             <div className="information-content">
               {/* Summary from the loaded Trimble model and exported FieldView CSVs. */}
@@ -1031,13 +1048,15 @@ function App() {
             </div>
           </section>
           {/* Exported FieldView forms associated with the selected BIM element. */}
-          <section className="panel field-panel">
+          <section className={`panel field-panel ${panelCollapsed.field ? "panel-collapsed" : ""}`}>
             <div className="panel-header">
               <div>
                 <h2>Field Information</h2>
                 <span>{realSelectedObject ? `Selected pour: ${selectedPourId || "No Full Pour ID"}` : "Select a BIM element to see linked inspections"}</span>
               </div>
-              <span className="mock-badge">DEMO LINKS</span>
+              <div className="panel-header-controls"><span className="mock-badge">DEMO LINKS</span>
+                <button type="button" className="panel-action" aria-expanded={!panelCollapsed.field} onClick={() => togglePanel("field")}>{panelCollapsed.field ? "+ Expand" : "− Minimise"}</button>
+              </div>
             </div>
             <div className="field-summary">
               <div><span>Exported forms</span><strong>{fieldViewData?.forms.length ?? "…"}</strong></div>
