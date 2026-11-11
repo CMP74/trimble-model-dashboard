@@ -322,75 +322,121 @@ const mockModels = [
   },
 ];
 
-app.get("/api/models", async (req, res) => {
-  if (!trimbleAuth.accessToken) {
-    return res.status(401).json({
-      error: "Connect to Trimble first",
-    });
+// Discover models throughout the current Trimble Connect project. This replaces
+// the old single-folder model list; document indexing remains unchanged.
+const MODEL_FILE_RE = /\.(ifc|trb|skp|rvt|dwg|tekla)$/i;
+function trimbleItemName(item) { return String(item?.name ?? item?.fileName ?? ""); }
+function trimbleItemId(item) { return String(item?.id ?? item?.fileId ?? ""); }
+function isTrimbleFolder(item) {
+  const kind = String(item?.type ?? item?.itemType ?? item?.objectType ?? "").toLowerCase();
+  if (kind.includes("folder") || item?.isFolder === true) return true;
+  if (kind.includes("file") || item?.isFolder === false) return false;
+  // Some folder-item responses omit the type; folders usually have no extension.
+  return Boolean(trimbleItemId(item)) && !/\.[^./]+$/.test(trimbleItemName(item));
+}
+function normalizeTagList(value) {
+  const values = Array.isArray(value) ? value : (value ? [value] : []);
+  return [...new Set(values.map(tag => typeof tag === "string" ? tag :
+    String(tag?.label ?? tag?.name ?? tag?.tagName ?? "")).map(x => x.trim()).filter(Boolean))];
+}
+function tagObjectsFromResponse(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["objects", "items", "results", "data", "tags"]) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+    if (Array.isArray(payload?.[key]?.items)) return payload[key].items;
   }
-
+  return [];
+}
+async function projectTagAssignments(projectId, modelIds) {
+  // Trimble exposes project tags as relationships. A failed optional tag lookup
+  // must not prevent model discovery; inline file tags are used as well.
+  const assignments = new Map();
+  const notes = [];
   try {
-    const projectId = "7nAFSwau0CI";
-
-    const response = await fetch(
-      `https://app22.connect.trimble.com/tc/api/2.0/folders/KVqla3gS1XY/items`,
-      {
-        headers: {
-          Authorization: `Bearer ${trimbleAuth.accessToken}`,
-          Accept: "application/json",
-        },
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-
-      console.error(
-        "Trimble models API failed:",
-        response.status,
-        errorText
-      );
-
-      return res.status(502).json({
-        error: "Could not retrieve Trimble Connect models",
-        trimbleStatus: response.status,
-      });
+    const tags = tagObjectsFromResponse(await tcJson(`${TC_API}/tags?projectId=${encodeURIComponent(projectId)}`));
+    if (tags.length > 150) notes.push("Tag relationship lookup limited to the first 150 project tags.");
+    const candidates = tags.slice(0, 150);
+    for (let offset = 0; offset < candidates.length; offset += 6) {
+      await Promise.all(candidates.slice(offset, offset + 6).map(async tag => {
+        const tagId = String(tag.id ?? "");
+        const tagName = String(tag.label ?? tag.name ?? "").trim();
+        if (!tagId || !tagName) return;
+        try {
+          const linked = tagObjectsFromResponse(await tcJson(`${TC_API}/tags/${encodeURIComponent(tagId)}/objects`));
+          for (const link of linked) {
+            const id = String(link?.objectId ?? link?.fileId ?? link?.id ?? link?.object?.id ?? "");
+            if (!modelIds.has(id)) continue;
+            if (!assignments.has(id)) assignments.set(id, new Set());
+            assignments.get(id).add(tagName);
+          }
+        } catch (error) { notes.push(`Tag relationships unavailable for ${tagName}: ${error.message}`); }
+      }));
     }
-
-    const data = await response.json();
-
-    console.log(
-  "Trimble models response:",
-  JSON.stringify(data, null, 2).slice(0, 3000)
-);
-
-    const rawModels = Array.isArray(data)
-      ? data
-      : Array.isArray(data.models)
-        ? data.models
-        : Array.isArray(data.items)
-          ? data.items
-          : [];
-
-    const models = rawModels.map((model) => ({
-      id: String(model.id),
-      name: model.name || "Unnamed model",
-      discipline: "Unclassified",
-      loaded: false,
-      source: "Trimble Connect",
-    }));
-
-    return res.json({
-      source: "trimble-connect",
-      count: models.length,
-      models,
-    });
   } catch (error) {
-    console.error("Trimble models request failed:", error);
-
-    return res.status(500).json({
-      error: "Could not retrieve Trimble Connect models",
-    });
+    notes.push(`Trimble tag API unavailable; showing tags included in folder metadata only (${error.message}).`);
+  }
+  return { assignments, notes };
+}
+app.get("/api/models", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!tokenIsValid()) return res.status(401).json({ error: "Connect to Trimble first" });
+  try {
+    const project = await tcJson(`${TC_API}/projects/${encodeURIComponent(DOCUMENT_PROJECT_ID)}`);
+    const rootId = folderIdFromProject(project);
+    if (!rootId) throw new Error("Trimble project metadata has no root folder ID");
+    const queue = [{ id: String(rootId), path: "", depth: 0 }];
+    const visited = new Set();
+    const discovered = new Map();
+    let scannedFolders = 0;
+    const warnings = [];
+    const MAX_FOLDERS = 1500;
+    const MAX_DEPTH = 25;
+    while (queue.length) {
+      if (visited.size >= MAX_FOLDERS) {
+        warnings.push(`Folder scan reached the ${MAX_FOLDERS}-folder safety limit; results may be incomplete.`);
+        break;
+      }
+      const folder = queue.shift();
+      if (visited.has(folder.id)) continue;
+      visited.add(folder.id);
+      let entries;
+      try {
+        entries = extractItems(await tcJson(`${TC_API}/folders/${encodeURIComponent(folder.id)}/items`));
+        scannedFolders++;
+      } catch (error) {
+        if (folder.id === String(rootId)) throw error;
+        warnings.push(`Could not read folder ${folder.path || folder.id}: ${error.message}`);
+        continue;
+      }
+      for (const item of entries) {
+        const id = trimbleItemId(item);
+        const name = trimbleItemName(item);
+        if (!id || !name) continue;
+        if (isTrimbleFolder(item)) {
+          if (folder.depth >= MAX_DEPTH) warnings.push(`Skipped folder ${name} at depth limit ${MAX_DEPTH}.`);
+          else queue.push({ id, path: [folder.path, name].filter(Boolean).join("/"), depth: folder.depth + 1 });
+          continue;
+        }
+        if (!MODEL_FILE_RE.test(name)) continue;
+        discovered.set(id, {
+          id, name, discipline: "Unclassified", loaded: false,
+          source: "Trimble Connect", folder: folder.path || "/",
+          tags: normalizeTagList(item.tags ?? item.tagNames ?? item.fileTags),
+        });
+      }
+    }
+    const { assignments, notes } = await projectTagAssignments(DOCUMENT_PROJECT_ID, new Set(discovered.keys()));
+    warnings.push(...notes);
+    for (const model of discovered.values()) {
+      const tagged = assignments.get(model.id);
+      if (tagged) model.tags = [...new Set([...model.tags, ...tagged])].sort();
+    }
+    const models = [...discovered.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return res.json({ source: "trimble-connect", count: models.length, scannedFolders,
+      warnings: warnings.slice(0, 12), models });
+  } catch (error) {
+    console.error("Trimble project-wide model discovery failed:", error);
+    return res.status(502).json({ error: `Could not retrieve Trimble Connect models: ${error.message}` });
   }
 });
 

@@ -131,6 +131,24 @@ function App() {
   const [showFilteredIn3D, setShowFilteredIn3D] = useState(false);
   const [hiddenPropertyColumns, setHiddenPropertyColumns] = useState<string[]>([]);
   const [allBIMObjects, setAllBIMObjects] = useState<SelectedBIMObject[]>([]);
+  // Per-model BIM data is opt-in. Loading geometry never launches property extraction.
+  const [modelDataChoice, setModelDataChoice] = useState("");
+  const [dataCommand, setDataCommand] = useState<{ modelId: string; action: "load" | "cancel" | "clear"; sequence: number }>();
+  const [dataProgress, setDataProgress] = useState<{ modelId: string; loaded: number; total: number; status: "loading" | "complete" | "cancelled" | "error"; message?: string } | null>(null);
+  const [cachedModelIds, setCachedModelIds] = useState<string[]>([]);
+  const requestModelData = (action: "load" | "cancel" | "clear") => {
+    const targetModelId = action === "cancel" ? (dataProgress?.modelId || modelDataChoice) : modelDataChoice;
+    if (!targetModelId) return;
+    if (action === "load") {
+      setDataProgress({ modelId: targetModelId, loaded: 0, total: 0, status: "loading", message: "Preparing model data…" });
+    } else if (action === "clear") {
+      setAllBIMObjects(current => current.filter(object => object.modelId !== targetModelId));
+      setCachedModelIds(current => current.filter(id => id !== targetModelId));
+      setDataProgress(null);
+      setShowFilteredIn3D(false);
+    }
+    setDataCommand(previous => ({ modelId: targetModelId, action, sequence: (previous?.sequence ?? 0) + 1 }));
+  };
 
   const [authStatus, setAuthStatus] =
     useState("Not connected");
@@ -151,6 +169,10 @@ function App() {
   const [formPage, setFormPage] = useState(0);
   const [pourLinks, setPourLinks] = useState<PourFormLink[]>([]);
   const [colourByFieldView, setColourByFieldView] = useState(false);
+  // Keep lightweight pour identifiers separate from the opt-in full Model Data cache.
+  const [inspectionIdentifiers, setInspectionIdentifiers] = useState<{modelId: string; runtimeId: number; fullPourId: string}[]>([]);
+  const [inspectionScan, setInspectionScan] = useState<{ loaded: number; total: number; status: "loading" | "complete" | "error"; message?: string } | null>(null);
+  const [inspectionScanRetry, setInspectionScanRetry] = useState(0);
   const [pourLinkError, setPourLinkError] = useState("");
 
   useEffect(() => {
@@ -165,7 +187,7 @@ function App() {
   // -------------------------------------------------------
   const [models, setModels] = useState<ModelItem[]>([]);
   const [modelCommand, setModelCommand] = useState<{
-    id: string;
+    ids: string[];
     loaded: boolean;
     sequence: number;
   } | undefined>(undefined);
@@ -177,6 +199,12 @@ function App() {
   const [modelsLoading, setModelsLoading] =
     useState(true);
   const [modelSearch, setModelSearch] = useState("");
+  const [modelTagFilter, setModelTagFilter] = useState("All tags");
+  const [modelFolderFilter, setModelFolderFilter] = useState("All folders");
+  const [modelDiscoveryError, setModelDiscoveryError] = useState("");
+  const [modelDiscoveryWarnings, setModelDiscoveryWarnings] = useState<string[]>([]);
+  const [modelRefreshSequence, setModelRefreshSequence] = useState(0);
+  const [modelScannedFolders, setModelScannedFolders] = useState(0);
   const [disciplineFilter, setDisciplineFilter] =
     useState("All disciplines");
   // Asite connector status: explicitly read-only, with no simulated live data.
@@ -203,9 +231,13 @@ function App() {
       .find((item) => item.name.toLowerCase() === propertyName.toLowerCase());
     return property ? formatBIMValue(property.value) : undefined;
   };
+  // The selected-only view can display clicked elements without scanning an entire model.
+  const tableBIMObjects = showSelectedModelOnly
+    ? [...new Map(selectedBIMObjects.map(object => [`${object.modelId}:${object.runtimeId}`, object] as const)).values()]
+    : allBIMObjects;
   // Dynamic columns preserve each IFC property group and its individual fields.
   const propertyColumns = Array.from(
-    new Set(allBIMObjects.flatMap(object =>
+    new Set(tableBIMObjects.flatMap(object =>
       object.propertyGroups.flatMap(group =>
         group.properties.map(property => `${group.name} / ${property.name}`)
       )
@@ -220,13 +252,13 @@ function App() {
     const property = group?.properties.find(item => item.name === propertyName);
     return property ? formatBIMValue(property.value) : "—";
   };
-  const ifcClasses = Array.from(new Set(allBIMObjects.map(object => object.ifcClass)))
+  const ifcClasses = Array.from(new Set(tableBIMObjects.map(object => object.ifcClass)))
     .sort((a, b) => a.localeCompare(b));
   const propertyValues = propertyColumnFilter
-    ? Array.from(new Set(allBIMObjects.map(object => getGroupedProperty(object, propertyColumnFilter))))
+    ? Array.from(new Set(tableBIMObjects.map(object => getGroupedProperty(object, propertyColumnFilter))))
         .sort((a, b) => a.localeCompare(b))
     : [];
-  const filteredBIMObjects = allBIMObjects.filter(object => {
+  const filteredBIMObjects = tableBIMObjects.filter(object => {
     if (showSelectedModelOnly && !selectedBIMObjects.some(selected => selected.modelId === object.modelId && selected.runtimeId === object.runtimeId)) return false;
     if (ifcClassFilter && object.ifcClass !== ifcClassFilter) return false;
     if (propertyColumnFilter && propertyValueFilter &&
@@ -264,7 +296,11 @@ function App() {
   // Preserve the three supplied demonstration links; generate additional *clearly
   // labelled* demo associations only for pour IDs actually found in the model.
   // These are NOT verified FieldView-to-BIM relationships.
-  const pourIds = Array.from(new Set(allBIMObjects.map(fullPourId).filter(Boolean))).sort();
+  const pourIds = Array.from(new Set([
+    ...allBIMObjects.map(fullPourId),
+    ...selectedBIMObjects.map(fullPourId),
+    ...inspectionIdentifiers.map(entry => entry.fullPourId),
+  ].filter(Boolean))).sort();
   const existingPourIds = new Set(pourLinks.map(link => link.fullPourId));
   const itpForms = (fieldViewData?.forms ?? []).filter(form =>
     form.FormType === "Reinforced Concrete ITP Forms" && !!form.FormID);
@@ -327,12 +363,17 @@ function App() {
   const unresolvedItpLinks = effectivePourLinks.filter(link =>
     link.recordType !== "NCR" && !formById.has(link.formId));
   const objectsWithoutPourId = allBIMObjects.filter(object => !fullPourId(object)).length;
-  const colourEntries = allBIMObjects.flatMap(object => {
-    const pourId = fullPourId(object);
-    if (!pourId) return [];
-    const status = getInspectionState(pourId);
+  const colourableObjects = [...new Map([...allBIMObjects, ...selectedBIMObjects].map(object =>
+    [`${object.modelId}:${object.runtimeId}`, object] as const)).values()];
+  const colourCandidates = [...new Map([
+    ...inspectionIdentifiers.map(entry => ({...entry})),
+    ...colourableObjects.map(object => ({modelId: object.modelId, runtimeId: object.runtimeId, fullPourId: fullPourId(object)})),
+  ].map(entry => [`${entry.modelId}:${entry.runtimeId}`, entry] as const)).values()];
+  const colourEntries = colourCandidates.flatMap(entry => {
+    if (!entry.fullPourId) return [];
+    const status = getInspectionState(entry.fullPourId);
     const color = status === "Complete" ? "#22C55E" : status === "In Progress" ? "#F59E0B" : status === "NCR" ? "#EF4444" : "";
-    return color ? [{ modelId: object.modelId, runtimeId: object.runtimeId, color }] : [];
+    return color ? [{ modelId: entry.modelId, runtimeId: entry.runtimeId, color }] : [];
   });
   const colourCommand = { enabled: colourByFieldView, entriesKey: colourEntries
     .map(entry => `${entry.modelId}:${entry.runtimeId}:${entry.color}`).sort().join("|") };
@@ -428,8 +469,8 @@ function App() {
     setExcelExportMessage("");
     setExcelExportError("");
     if (!filteredBIMObjects.length) {
-      setExcelExportError(allBIMObjects.length === 0
-        ? "No BIM objects are loaded yet. Connect to Trimble and load a model before exporting."
+      setExcelExportError(tableBIMObjects.length === 0
+        ? "No BIM data is available. Select a loaded model above and click Load model data, or select objects in the viewer and enable Show selected only."
         : "No rows match the current filters. Clear the Model Data filters or turn off 'Show selected only', then export again.");
       return;
     }
@@ -474,25 +515,33 @@ function App() {
   // -------------------------------------------------------
   // Filter Trimble models
   // -------------------------------------------------------
+  const availableTags = [...new Set(models.flatMap(model => model.tags ?? []))].sort();
+  const availableFolders = [...new Set(models.map(model => model.folder || "/"))].sort();
   const filteredModels = models.filter((model) => {
-    const matchesSearch = model.name
-      .toLowerCase()
-      .includes(modelSearch.toLowerCase());
-    const matchesDiscipline =
-      disciplineFilter === "All disciplines" ||
-      model.discipline === disciplineFilter;
-    return matchesSearch && matchesDiscipline;
+    const term = modelSearch.toLowerCase().trim();
+    const matchesSearch = !term || [model.name, model.discipline, model.folder || "", ...(model.tags ?? [])]
+      .some(value => value.toLowerCase().includes(term));
+    const matchesDiscipline = disciplineFilter === "All disciplines" || model.discipline === disciplineFilter;
+    const matchesTag = modelTagFilter === "All tags" || (model.tags ?? []).includes(modelTagFilter);
+    const matchesFolder = modelFolderFilter === "All folders" || (model.folder || "/") === modelFolderFilter;
+    return matchesSearch && matchesDiscipline && matchesTag && matchesFolder;
   });
-  // Load the exported CSVs only when the Form Explorer is opened.
+  // Load the CSV when selected BIM elements, the Forms tab, search, or colouring needs it.
+  // IMPORTANT: Do not cancel the in-flight request in this effect's cleanup. Setting
+  // fieldViewLoading itself triggers a re-render; the previous cleanup invalidated
+  // the request before it resolved, leaving BOTH Forms and selected-element links
+  // permanently stuck on "Loading…". loadFieldViewCSV() already deduplicates
+  // concurrent calls, and this guard prevents duplicate state requests.
   useEffect(() => {
-    if ((activeTab !== "fieldview" && activeTab !== "ai" && allBIMObjects.length === 0) || fieldViewData || fieldViewLoading || fieldViewError) return;
-    let active = true;
+    const needsFieldView = activeTab === "fieldview" || activeTab === "ai" ||
+      allBIMObjects.length > 0 || selectedBIMObjects.length > 0 || colourByFieldView;
+    if (!needsFieldView || fieldViewData || fieldViewLoading || fieldViewError) return;
     setFieldViewLoading(true);
-    loadFieldViewCSV().then(data => { if (active) setFieldViewData(data); })
-      .catch(error => { if (active) setFieldViewError(String(error)); })
-      .finally(() => { if (active) setFieldViewLoading(false); });
-    return () => { active = false; };
-  }, [activeTab, allBIMObjects.length, fieldViewData, fieldViewError]);
+    void loadFieldViewCSV()
+      .then(data => setFieldViewData(data))
+      .catch(error => setFieldViewError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setFieldViewLoading(false));
+  }, [activeTab, allBIMObjects.length, selectedBIMObjects.length, colourByFieldView, fieldViewData, fieldViewLoading, fieldViewError]);
   const matchingForms = (fieldViewData?.forms ?? []).filter(form =>
     (!showSelectedFormsOnly || selectedFormIds.has(form.FormID)) &&
     (!formStatus || form.Status === formStatus) &&
@@ -510,31 +559,29 @@ function App() {
   // Load Trimble models
   // -------------------------------------------------------
   useEffect(() => {
+    let cancelled = false;
     const loadModels = async () => {
+      setModelsLoading(true);
+      setModelDiscoveryError("");
       try {
-        setModelsLoading(true);
-        const modelData = await getModels();
-        setModels(modelData);
+        const result = await getModels();
+        if (cancelled) return;
+        setModels(existing => result.models.map(model => ({
+          ...model, loaded: existing.find(item => item.id === model.id)?.loaded ?? false,
+        })));
+        setModelDiscoveryWarnings(result.warnings ?? []);
+        setModelScannedFolders(result.scannedFolders ?? 0);
       } catch (error) {
-        console.error(
-          "Could not load models:",
-          error
-        );
-        // Temporary real model confirmed by the Trimble viewer event.
-        // Used only while the project-folder listing endpoint is unavailable.
-        setModels([{
-          id: "WnC-a6wV27I",
-          name: "SZC-MW0900-CWA-U9-HPL-01XXXX-MDL-CBF-100001_Galleries Pour Model HPL_Ver8_P04.ifc",
-          discipline: "Unclassified",
-          loaded: false,
-          source: "Trimble Connect (verified test model)",
-        }]);
-      } finally {
-        setModelsLoading(false);
-      }
+        if (!cancelled) {
+          setModelDiscoveryError(error instanceof Error ? error.message : String(error));
+          setModelDiscoveryWarnings([]);
+          // Keep any previously loaded models on screen on a transient network failure.
+        }
+      } finally { if (!cancelled) setModelsLoading(false); }
     };
-    loadModels();
-  }, []);
+    void loadModels();
+    return () => { cancelled = true; };
+  }, [modelRefreshSequence, authStatus]);
   // Asite connection readiness; no credentials are sent from the browser.
   useEffect(() => {
     let cancelled = false;
@@ -665,21 +712,21 @@ function App() {
   // -------------------------------------------------------
   // Toggle Trimble model
   // -------------------------------------------------------
+  const setModelsLoaded = (modelIds: string[], loaded: boolean) => {
+    const ids = [...new Set(modelIds)].filter(id => models.some(model => model.id === id && model.loaded !== loaded));
+    if (!ids.length) return;
+    setModels(current => current.map(item => ids.includes(item.id) ? { ...item, loaded } : item));
+    if (!loaded) {
+      setInspectionIdentifiers(current => current.filter(entry => !ids.includes(entry.modelId)));
+      setAllBIMObjects(current => current.filter(object => !ids.includes(object.modelId)));
+      setCachedModelIds(current => current.filter(id => !ids.includes(id)));
+      setShowFilteredIn3D(false);
+    }
+    setModelCommand(previous => ({ ids, loaded, sequence: (previous?.sequence ?? 0) + 1 }));
+  };
   const toggleModel = (modelId: string) => {
-    const model = models.find((item) => item.id === modelId);
-    if (!model) return;
-    const loaded = !model.loaded;
-    setModels((currentModels) =>
-      currentModels.map((item) =>
-        item.id === modelId ? { ...item, loaded } : item
-      )
-    );
-    if (!loaded) setAllBIMObjects(current => current.filter(object => object.modelId !== modelId));
-    setModelCommand((previous) => ({
-      id: modelId,
-      loaded,
-      sequence: (previous?.sequence ?? 0) + 1,
-    }));
+    const model = models.find(item => item.id === modelId);
+    if (model) setModelsLoaded([modelId], !model.loaded);
   };
   // -------------------------------------------------------
   // UI
@@ -767,11 +814,24 @@ function App() {
             <div className="viewer-container">
               <TrimbleViewer
                 modelCommand={modelCommand}
+                dataCommand={dataCommand}
+                onDataProgress={setDataProgress}
                 selectionCommand={selectionCommand}
                 visibilityCommand={visibilityCommand}
                 colourCommand={colourCommand}
+                inspectionScanEnabled={colourByFieldView && Boolean(fieldViewData)}
+                inspectionScanModelIds={models.filter(model => model.loaded).map(model => model.id)}
+                inspectionScanRetry={inspectionScanRetry}
+                onInspectionScanProgress={setInspectionScan}
+                onInspectionIdentifiers={(modelId, identifiers) => {
+                  setInspectionIdentifiers(current => [
+                    ...current.filter(entry => entry.modelId !== modelId),
+                    ...identifiers.map(entry => ({ modelId, ...entry })),
+                  ]);
+                }}
                 onModelObjectsLoaded={(modelId, objects) => {
                   setAllBIMObjects(current => [...current.filter(object => object.modelId !== modelId), ...objects]);
+                  setCachedModelIds(current => current.includes(modelId) ? current : [...current, modelId]);
                 }}
                 onObjectsSelected={(objects) => {
                   setSelectedBIMObjects(objects);
@@ -792,9 +852,21 @@ function App() {
                 <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>Model-wide status by unique Full Pour ID · demonstration associations</p>
               </div>
               <label style={{ display: "flex", gap: 9, alignItems: "center", fontWeight: 600, cursor: "pointer", fontSize: 14 }}>
-                <input type="checkbox" checked={colourByFieldView} onChange={event => setColourByFieldView(event.target.checked)} />
+                <input type="checkbox" checked={colourByFieldView} onChange={event => {
+                  setColourByFieldView(event.target.checked);
+                  if (event.target.checked) setInspectionScan(null);
+                }} />
                 Colour model by FieldView status
               </label>
+              {colourByFieldView && <div role="status" style={{fontSize: 12, marginTop: 8}}>
+                {fieldViewLoading ? "Loading FieldView records… " : !fieldViewData ? "Waiting for FieldView records… " :
+                  inspectionScan?.status === "loading" ? (inspectionScan.message || `Scanning pour identifiers: ${inspectionScan.loaded}/${inspectionScan.total} elements… `) :
+                  inspectionScan?.status === "error" ? `Identifier scan: ${inspectionScan.message} ` :
+                  inspectionScan?.status === "complete" ? `Inspected ${inspectionScan.loaded} elements for pour IDs. ` :
+                  "Preparing identifier-only scan… "}
+                {inspectionScan?.status === "error" && <button type="button" onClick={() => setInspectionScanRetry(value => value + 1)}>Retry scan</button>}
+                <span style={{marginLeft: 8, opacity: .75}}>The optional whole-model scan requests properties in batches; switch off to cancel. Selecting a single element remains on-demand.</span>
+              </div>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12, marginTop: 17 }}>
               {([
@@ -898,6 +970,33 @@ function App() {
                   <option>MEP</option>
                 </select>
               </div>
+              <div className="model-toolbar" style={{ marginTop: 10 }}>
+                <select className="discipline-filter" aria-label="Filter models by Trimble Connect tag"
+                  value={modelTagFilter} onChange={event => setModelTagFilter(event.target.value)}>
+                  <option>All tags</option>
+                  {availableTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+                </select>
+                <select className="discipline-filter" aria-label="Filter models by folder"
+                  value={modelFolderFilter} onChange={event => setModelFolderFilter(event.target.value)}>
+                  <option>All folders</option>
+                  {availableFolders.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+                </select>
+              </div>
+              <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", margin:"10px 0"}}>
+                <button type="button" onClick={() => setModelRefreshSequence(value => value + 1)} disabled={modelsLoading}>Refresh models</button>
+                <button type="button" onClick={() => setModelsLoaded(filteredModels.map(model => model.id), true)}
+                  disabled={modelsLoading || !filteredModels.length}>Load filtered ({filteredModels.length})</button>
+                <button type="button" onClick={() => setModelsLoaded(models.map(model => model.id), true)}
+                  disabled={modelsLoading || !models.length}>Load all ({models.length})</button>
+                <button type="button" onClick={() => setModelsLoaded(models.map(model => model.id), false)}
+                  disabled={!models.some(model => model.loaded)}>Unload all</button>
+              </div>
+              <p style={{fontSize:12, margin:"6px 0", color:"#64748b"}}>
+                {models.length} models discovered in {modelScannedFolders} folders · {filteredModels.length} shown · {models.filter(model => model.loaded).length} selected for loading.
+                Loading every large model may take time.
+              </p>
+              {modelDiscoveryError && <p role="alert" style={{color:"#b42318", fontSize:12}}>{modelDiscoveryError}</p>}
+              {modelDiscoveryWarnings.length > 0 && <p style={{fontSize:12, color:"#9a6700"}} title={modelDiscoveryWarnings.join("\n")}>{modelDiscoveryWarnings[0]}{modelDiscoveryWarnings.length > 1 ? ` (+${modelDiscoveryWarnings.length - 1} more warnings)` : ""}</p>}
               {/* TRIMBLE MODELS */}
               <div className="section-title">
                 Trimble Connect Models
@@ -908,6 +1007,7 @@ function App() {
                     Loading models...
                   </div>
                 )}
+                {!modelsLoading && !filteredModels.length && <div className="model-row">No models match the selected filters.</div>}
                 {!modelsLoading &&
                   filteredModels.map(
                     (model) => (
@@ -936,6 +1036,8 @@ function App() {
                             }{" "}
                             · {model.source}
                           </span>
+                          {model.folder && <span title="Trimble Connect folder" style={{overflowWrap:"anywhere"}}>Folder: {model.folder}</span>}
+                          {(model.tags ?? []).length > 0 && <span title="Trimble Connect tags" style={{overflowWrap:"anywhere"}}>Tags: {model.tags.join(", ")}</span>}
                         </div>
                         {model.loaded && (
                           <span className="loaded-badge">
@@ -1060,7 +1162,9 @@ function App() {
                     <div style={{ padding: 12, border: "1px solid #b7c7d9", borderRadius: 8, marginTop: 12 }}>
                       <strong>FieldView pour association (demonstration only)</strong>
                       <p style={{ margin: "8px 0" }}>Full Pour ID: <strong>{selectedPourId || "Not found on this element"}</strong></p>
-                      {selectedPourLinks.length === 0 ? <p>No demonstration FieldView mapping for this pour.</p> : selectedPourLinks.map(link => {
+                      {selectedPourId && !fieldViewData && fieldViewLoading && <p>Loading FieldView forms for the selected pour…</p>}
+                      {selectedPourId && fieldViewError && <p role="alert">FieldView CSV could not be loaded: {fieldViewError}</p>}
+                      {selectedPourLinks.length === 0 && !fieldViewLoading ? <p>No demonstration FieldView mapping for this pour.</p> : selectedPourLinks.map(link => {
                         const form = fieldViewData?.forms.find(item => item.FormID === link.formId);
                         return <div key={link.formId} style={{ marginTop: 8 }}>
                           <strong>{form?.FormName || link.formId}</strong> · {link.recordType || "Form"} · {form?.Status || "Loading form…"} · {link.association === "generated-demo" ? "Generated demonstration link" : "Supplied demonstration link"}
@@ -1138,7 +1242,7 @@ function App() {
           <div className="panel-header model-data-header">
             <div>
               <h2>Model Data</h2>
-              <span>Spreadsheet view · all loaded BIM objects</span>
+              <span>On-demand BIM properties · select one model to extract its data</span>
             </div>
             <button
               type="button"
@@ -1149,6 +1253,37 @@ function App() {
             </button>
           </div>
           <div className="model-data-content">
+            <div style={{ padding: 14, marginBottom: 12, border: "1px solid #b9d8dc", background: "#f4fafb", borderRadius: 8 }}>
+              <strong style={{display:"block",marginBottom:8}}>On-demand model data</strong>
+              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                <select aria-label="Select model for BIM data extraction" className="discipline-filter"
+                  value={modelDataChoice} onChange={event => setModelDataChoice(event.target.value)}>
+                  <option value="">Choose a loaded model…</option>
+                  {models.filter(model => model.loaded).map(model =>
+                    <option key={model.id} value={model.id}>{model.name}{cachedModelIds.includes(model.id) ? " (cached)" : ""}</option>)}
+                </select>
+                <button type="button" className="trimble-connect-button" disabled={!modelDataChoice || dataProgress?.status === "loading"}
+                  onClick={() => requestModelData("load")}>{cachedModelIds.includes(modelDataChoice) ? "Reload model data" : "Load model data"}</button>
+                <button type="button" disabled={dataProgress?.status !== "loading"}
+                  onClick={() => requestModelData("cancel")}>Cancel extraction</button>
+                <button type="button" disabled={!modelDataChoice || !cachedModelIds.includes(modelDataChoice)}
+                  onClick={() => requestModelData("clear")}>Clear cached model data</button>
+              </div>
+              <p style={{fontSize:12,color:"#526878",margin:"8px 0 4px"}}>
+                Models remain in the 3D viewer without bulk property requests. Clicking a viewer element retrieves its properties immediately.
+                For a spreadsheet or Excel export, load a chosen model here. {cachedModelIds.length} model dataset(s) cached in this browser session.
+              </p>
+              {dataProgress && <div role="status" style={{fontSize:12,marginTop:8}}>
+                {dataProgress.status === "loading" ? `Extracting ${dataProgress.loaded.toLocaleString()} / ${dataProgress.total ? dataProgress.total.toLocaleString() : "…"} elements` :
+                 dataProgress.status === "complete" ? `Extraction complete: ${dataProgress.loaded.toLocaleString()} elements` :
+                 dataProgress.status === "cancelled" ? "Extraction cancelled" : `Extraction failed: ${dataProgress.message || "Unknown error"}`}
+                {dataProgress.status === "loading" && dataProgress.total > 0 &&
+                  <progress value={dataProgress.loaded} max={dataProgress.total} style={{display:"block",width:"min(100%,500px)",marginTop:5}} />}
+              </div>}
+              <p style={{fontSize:12,color:"#795a13",margin:"8px 0 0"}}>
+                FieldView colour mapping and 3D spreadsheet isolation apply to extracted model datasets; unextracted models are not treated as having no inspections.
+              </p>
+            </div>
             <div style={{ padding: 14, marginBottom: 12, border: "1px solid #cbd5e1", borderRadius: 8 }}>
               <strong>Selected elements: {selectedUnique.length}</strong>
               <span style={{ marginLeft: 16 }}>Unique pours: {selectedPourIds.length}</span>
@@ -1237,7 +1372,8 @@ function App() {
                 />
                 Show filtered elements only in 3D
               </label>
-              <span>{filteredBIMObjects.length} of {allBIMObjects.length} BIM objects · {propertyColumns.length} IFC property columns</span>
+              <span>{filteredBIMObjects.length} of {tableBIMObjects.length} BIM objects · {propertyColumns.length} IFC property columns</span>
+              {filteredBIMObjects.length > 300 && <span role="status">Showing first 300 rows for responsiveness; Excel exports all {filteredBIMObjects.length} matching rows.</span>}
             </div>
             <div className="model-data-scroll">
               <table className="model-data-table">
@@ -1260,7 +1396,7 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredBIMObjects.map(object => (
+                  {filteredBIMObjects.slice(0, 300).map(object => (
                     <tr
                       key={`${object.modelId}-${object.runtimeId}`}
                        onClick={() => {

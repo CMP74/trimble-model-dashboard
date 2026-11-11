@@ -1,79 +1,36 @@
-
 export type ModelItem = {
   id: string;
   name: string;
   discipline: string;
   loaded: boolean;
   source: string;
+  folder?: string;
+  tags: string[];
 };
 
-type ModelsApiResponse = {
+export type ModelsApiResponse = {
   source: string;
   count: number;
+  scannedFolders?: number;
+  warnings?: string[];
   models: ModelItem[];
 };
 
-// Real Trimble model already verified in the 3D viewer.
-const verifiedModel: ModelItem = {
-  id: "WnC-a6wV27I",
-  name: "SZC-MW0900-CWA-U9-HPL-01XXXX-MDL-CBF-100001_Galleries Pour Model HPL_Ver8_P04.ifc",
-  discipline: "Structural",
-  loaded: false,
-  source: "Trimble Connect",
-};
-
-function isModel(item: ModelItem): boolean {
-  if (!item || typeof item.id !== "string") {
-    return false;
-  }
-
-  if (typeof item.name !== "string") {
-    return false;
-  }
-
-  // Only display recognised 3D model file types.
-  return /\.(ifc|trb|skp|rvt|tekla|dwg)$/i.test(
-    item.name.trim()
-  );
+export function isModel(item: ModelItem): boolean {
+  return Boolean(item && typeof item.id === "string" && typeof item.name === "string" &&
+    /\.(ifc|trb|skp|rvt|dwg|tekla)$/i.test(item.name.trim()));
 }
 
-export async function getModels(): Promise<ModelItem[]> {
-  try {
-    const response = await fetch("/api/models", {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Models API request failed: ${response.status}`
-      );
-    }
-
-    const data: ModelsApiResponse = await response.json();
-
-    const validModels = Array.isArray(data.models)
-      ? data.models.filter(isModel)
-      : [];
-
-    console.log("Models API source:", data.source);
-    console.log("Valid models:", validModels.length);
-
-    // Keep the confirmed working model available.
-    if (
-      !validModels.some(
-        (model) => model.id === verifiedModel.id
-      )
-    ) {
-      validModels.push(verifiedModel);
-    }
-
-    return validModels;
-  } catch (error) {
-    console.warn(
-      "Models API unavailable; using verified model:",
-      error
-    );
-
-    return [verifiedModel];
-  }
+// The result must reflect the project API: no hardcoded old test model is injected.
+export async function getModels(): Promise<ModelsApiResponse> {
+  const response = await fetch("/api/models", { cache: "no-store" });
+  const body = await response.text();
+  let data: ModelsApiResponse & {error?: string};
+  try { data = JSON.parse(body); }
+  catch { throw new Error(`Models API returned ${response.status} with an invalid or empty response`); }
+  if (!response.ok) throw new Error(data.error || `Models API request failed: ${response.status}`);
+  const models = Array.isArray(data.models) ? data.models.filter(isModel).map(model => ({
+    ...model, tags: Array.isArray(model.tags) ? model.tags.filter(tag => typeof tag === "string") : [],
+  })) : [];
+  return { ...data, models };
 }
