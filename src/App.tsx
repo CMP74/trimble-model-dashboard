@@ -8,6 +8,30 @@ import {
   getModels,
   type ModelItem,
 } from "./services/modelService";
+// Do not assume an API response contains JSON. Codespaces proxy/network failures
+// and expired backend sessions can return an empty body or HTML instead.
+const readDocumentApiJson = async (response: Response, action: string): Promise<any> => {
+  const raw = await response.text();
+  let body: any = null;
+  if (raw.trim()) {
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      const kind = /^\s*</.test(raw) ? "HTML rather than JSON" : "invalid JSON";
+      throw new Error(`${action}: server returned ${kind} (HTTP ${response.status}). Check that the Express backend is running on port 3000 and the frontend API proxy is connected.`);
+    }
+  }
+  if (!response.ok) {
+    const message = typeof body?.error === "string" ? body.error : (typeof body?.message === "string" ? body.message : "");
+    const authAdvice = response.status === 401 || response.status === 403 ? " Reconnect to Trimble Connect and try again." : "";
+    throw new Error(`${action}: ${message || `HTTP ${response.status}`}.${authAdvice}`);
+  }
+  if (!body || typeof body !== "object") {
+    throw new Error(`${action}: server returned an empty or unexpected response (HTTP ${response.status}). Check the Express backend on port 3000 and reconnect Trimble Connect if necessary.`);
+  }
+  return body;
+};
+
 function App() {
   // -------------------------------------------------------
   // Authentication
@@ -36,8 +60,7 @@ function App() {
     setDashboardDocsError("");
     try {
       const response = await fetch("/api/documents", { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const data = await readDocumentApiJson(response, "Load Trimble PDFs");
       setTcDocuments(Array.isArray(data.documents) ? data.documents : []);
     } catch (error) {
       setDashboardDocsError(error instanceof Error ? error.message : String(error));
@@ -53,18 +76,18 @@ function App() {
     setTcDocError("");
     try {
       const response = await fetch("/api/documents", {cache: "no-store"});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setTcDocuments(data.documents || []);
-      setTcDocMessage(`${(data.documents || []).length} PDF(s) found in the configured Trimble Connect folder.`);
+      const data = await readDocumentApiJson(response, "Find Trimble PDFs");
+      const documents = Array.isArray(data.documents) ? data.documents : [];
+      setTcDocuments(documents);
+      setTcDocMessage(`${documents.length} PDF(s) found in the configured Trimble Connect folder.`);
     } catch (error) { setTcDocError(String(error)); }
   };
   const indexTcDocument = async (id: string) => {
     setTcDocBusy(id); setTcDocError("");
     try {
       const response = await fetch(`/api/documents/${encodeURIComponent(id)}/index`, {method: "POST"});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const data = await readDocumentApiJson(response, "Index PDF");
+      if (!data.document || !Array.isArray(data.document.pages)) throw new Error("Index PDF: server response is missing indexed page details.");
       setTcDocMessage(`Indexed ${data.document.pageCount} page(s) from ${data.document.name}; ${data.document.pages.filter((p: {searchable: boolean}) => !p.searchable).length} page(s) contain no extractable text.`);
       setTcDocIndexed(value => value + 1);
     } catch (error) { setTcDocError(String(error)); }
@@ -80,8 +103,7 @@ function App() {
     setTcDocSearchBusy(true);
     try {
       const response = await fetch(`/api/documents/search?q=${encodeURIComponent(term)}`, {cache: "no-store"});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const data = await readDocumentApiJson(response, "Search PDFs");
       setTcDocResults(Array.isArray(data.results) ? data.results : []);
       setTcDocIndexed(Number(data.indexed) || 0);
     } catch (error) { setTcDocError(error instanceof Error ? error.message : String(error)); }
@@ -399,15 +421,47 @@ function App() {
       setActiveTab("dashboard");
     }
   };
+  const [excelExportBusy, setExcelExportBusy] = useState(false);
+  const [excelExportMessage, setExcelExportMessage] = useState("");
+  const [excelExportError, setExcelExportError] = useState("");
   const exportModelExcel = async () => {
-    const XLSX = await import("xlsx");
-    const headers = ["Runtime ID", "Object", "IFC Class", "Description", "Model ID", ...visiblePropertyColumns];
-    const rows = filteredBIMObjects.map(object => [object.runtimeId, object.name, object.ifcClass, object.description, object.modelId, ...visiblePropertyColumns.map(column => getGroupedProperty(object, column))]);
-    const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    sheet["!cols"] = headers.map((header, index) => ({ wch: Math.min(55, Math.max(14, header.length + 3, ...rows.slice(0, 100).map(row => String(row[index] ?? "").length + 2)) ) }));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, "Model Data");
-    XLSX.writeFile(workbook, "Trimble_Model_Data.xlsx");
+    setExcelExportMessage("");
+    setExcelExportError("");
+    if (!filteredBIMObjects.length) {
+      setExcelExportError(allBIMObjects.length === 0
+        ? "No BIM objects are loaded yet. Connect to Trimble and load a model before exporting."
+        : "No rows match the current filters. Clear the Model Data filters or turn off 'Show selected only', then export again.");
+      return;
+    }
+    setExcelExportBusy(true);
+    try {
+      const XLSX = await import("xlsx");
+      const headers = ["Runtime ID", "Object", "IFC Class", "Description", "Model ID", ...visiblePropertyColumns];
+      const rows = filteredBIMObjects.map(object => [object.runtimeId, object.name, object.ifcClass, object.description, object.modelId, ...visiblePropertyColumns.map(column => getGroupedProperty(object, column))]);
+      const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      sheet["!cols"] = headers.map((header, index) => ({ wch: Math.min(55, Math.max(14, header.length + 3, ...rows.slice(0, 100).map(row => String(row[index] ?? "").length + 2))) }));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, "Model Data");
+      // Create a browser download explicitly so errors aren't swallowed by writeFile.
+      const bytes = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "Trimble_Model_Data.xlsx";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      }
+      setExcelExportMessage(`Download requested: ${rows.length} displayed BIM row(s) in Trimble_Model_Data.xlsx. Check your browser's Downloads if it does not appear.`);
+    } catch (error) {
+      setExcelExportError(`Excel export failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExcelExportBusy(false);
+    }
   };
   const clearTableFilters = () => {
     setShowSelectedModelOnly(false);
@@ -1102,8 +1156,10 @@ function App() {
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                 <label><input type="checkbox" checked={showSelectedModelOnly} onChange={event => setShowSelectedModelOnly(event.target.checked)} /> Show selected only</label>
                 <button type="button" onClick={clearSelection} disabled={!selectedUnique.length}>Clear selection</button>
-                <button type="button" onClick={() => void exportModelExcel()} disabled={!filteredBIMObjects.length}>Export displayed rows to Excel (.xlsx)</button>
+                <button type="button" onClick={() => void exportModelExcel()} disabled={excelExportBusy}>{excelExportBusy ? "Preparing Excel…" : "Export displayed rows to Excel (.xlsx)"}</button>
               </div>
+              {excelExportError && <p role="alert" style={{ fontSize: 12, color: "#b42318", margin: "8px 0 0" }}>{excelExportError}</p>}
+              {excelExportMessage && <p role="status" style={{ fontSize: 12, color: "#08746d", margin: "8px 0 0" }}>{excelExportMessage}</p>}
               {selectedUnique.length > 0 && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Selected: {selectedUnique.map(object => object.name || `${object.modelId}:${object.runtimeId}`).join(" · ")}</p>}
             </div>
             <div className="model-data-toolbar" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
